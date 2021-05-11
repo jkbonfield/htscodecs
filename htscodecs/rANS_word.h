@@ -74,8 +74,8 @@ static inline void RansEncInit(RansState* r)
 // Renormalize the encoder. Internal function.
 static inline RansState RansEncRenorm(RansState x, uint8_t** pptr, uint32_t freq, uint32_t scale_bits)
 {
-    uint32_t x_max = ((RANS_BYTE_L >> scale_bits) << 16) * freq; // this turns into a shift.
-    if (x >= x_max) {
+    uint32_t x_max = ((RANS_BYTE_L >> scale_bits) << 16) * freq-1; // this turns into a shift.
+    if (x > x_max) {
         uint16_t* ptr = (uint16_t *)*pptr;
         *--ptr = (uint16_t) (x & 0xffff);
         x >>= 16;
@@ -215,7 +215,7 @@ static inline void RansEncSymbolInit(RansEncSymbol* s, uint32_t start, uint32_t 
     s->freq = freq;
     s->start = start;
 
-    s->x_max = ((RANS_BYTE_L >> scale_bits) << 16) * freq;
+    s->x_max = ((RANS_BYTE_L >> scale_bits) << 16) * freq -1;
     s->cmpl_freq = (uint16_t) ((1 << scale_bits) - freq);
     if (freq < 2) {
         // freq=0 symbols are never valid to encode, so it doesn't matter what
@@ -280,20 +280,20 @@ static inline void RansDecSymbolInit(RansDecSymbol* s, uint32_t start, uint32_t 
 // See RansEncSymbolInit for a description of how this works.
 static inline void RansEncPutSymbol(RansState* r, uint8_t** pptr, RansEncSymbol const* sym)
 {
-    RansAssert(sym->x_max != 0); // can't encode symbol with freq=0
+    //RansAssert(sym->x_max != 0); // can't encode symbol with freq=0
 
     // renormalize
     uint32_t x = *r;
     uint32_t x_max = sym->x_max;
 
 #ifdef HTSCODECS_LITTLE_ENDIAN
-    if (x >= x_max) {
+    if (x > x_max) {
 	(*pptr) -= 2;
         **(uint16_t **)pptr = x;
 	x >>= 16;
     }
 #else
-    if (x >= x_max) {
+    if (x > x_max) {
 	uint8_t* ptr = *pptr;
         ptr -= 2;
 	ptr[0] = x & 0xff;

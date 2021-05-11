@@ -208,8 +208,13 @@ int main(int argc, char **argv) {
 	    gettimeofday(&tv4, NULL);
 
 	    for (i = 0; i < nb; i++) {
-		if (b[i].sz != bu[i].sz || memcmp(b[i].blk, bu[i].blk, b[i].sz))
-		    fprintf(stderr, "Mismatch in block %d, sz %d/%d\n", i, b[i].sz, bu[i].sz);
+		if (b[i].sz != bu[i].sz || memcmp(b[i].blk, bu[i].blk, b[i].sz)) {
+		    int z;
+		    for (z = 0; z < b[i].sz; z++)
+			if (b[i].blk[z] != bu[i].blk[z])
+			    break;
+		    fprintf(stderr, "Mismatch in block %d, sz %d/%d, pos %d, got %d wanted %d\n", i, b[i].sz, bu[i].sz, z, b[i].blk[z], bu[i].blk[z]);
+		}
 		//free(bc[i].blk);
 		//free(bu[i].blk);
 	    }
