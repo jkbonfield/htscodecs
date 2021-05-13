@@ -171,6 +171,8 @@ typedef struct {
     uint32_t x_max;     // (Exclusive) upper bound of pre-normalization interval
     uint32_t rcp_freq;  // Fixed-point reciprocal frequency
     uint32_t bias;      // Bias
+
+    // NB: This pair are read as a 32-bit value by the SIMD o1 encoder.
     uint16_t cmpl_freq; // Complement of frequency: (1 << scale_bits) - freq
     uint16_t rcp_shift; // Reciprocal shift
 
