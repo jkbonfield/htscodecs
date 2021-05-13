@@ -847,10 +847,12 @@ unsigned char *rans_compress_O1_32x16(unsigned char *in, unsigned int in_size,
 	F[0][in[z*isz4]]++;
     T[0]+=NX-1;
 
-    // FIXME: Fix to prevent max freq.
-    // Why not just cap at TOTFREQ_O1-1 instead?
     uint32_t F0[256+MAGIC] = {0};
-    {
+
+    // Potential fix for the wrap-around bug in AVX2 O1 encoder with shift=12.
+    // This occurs when we have one single symbol, giving freq=4096.
+    // We fix it elsewhere for now by looking for the wrap-around.
+    if (0) {
 	int x = -1, y = -1;
 	int n1, n2;
 	for (x = 0; x < 256; x++) {
@@ -869,7 +871,6 @@ unsigned char *rans_compress_O1_32x16(unsigned char *in, unsigned int in_size,
 	    F[x][y]++;
 	    F[0][y]++; T[y]++; F0[y]=1; 
 	    F[0][x]++; T[x]++; F0[x]=1;
-	    
 	}
     }
 
@@ -899,16 +900,21 @@ unsigned char *rans_compress_O1_32x16(unsigned char *in, unsigned int in_size,
 	if (shift == TF_SHIFT_O1_FAST && max_val > TOTFREQ_O1_FAST)
 	    max_val = TOTFREQ_O1_FAST;
 
+//	if (max_val == TOTFREQ_O1_FAST)
+//	    max_val--;
+
 	if (normalise_freq(F[i], T[i], max_val) < 0)
 	    return NULL;
 	T[i]=max_val;
 
 	cp += encode_freq_d(cp, F0, F[i]);
 
+//	fprintf(stderr, "Normalise shift T[%d]=%d shift=%d\n", i, T[i], shift);
 	normalise_freq_shift(F[i], T[i], 1<<shift); T[i]=1<<shift;
 
 	uint32_t *F_i_ = F[i];
 	for (x = j = 0; j < 256; j++) {
+//	    fprintf(stderr, "x=%d F[%d][%d]=%d shift=%d\n", x, i, j, F_i_[j], shift);
 	    RansEncSymbolInit(&syms[i][j], x, F_i_[j], shift);
 	    x += F_i_[j];
 	}
@@ -1176,7 +1182,8 @@ unsigned char *rans_compress_O1_32x16(unsigned char *in, unsigned int in_size,
     // FIXME: Fix to prevent max freq.
     // Why not just cap at TOTFREQ_O1-1 instead?
     uint32_t F0[256+MAGIC] = {0};
-    {
+    if (0) {
+	// skew stats to never get max freq of 4096.
 	int x = -1, y = -1;
 	int n1, n2;
 	for (x = 0; x < 256; x++) {
@@ -1233,10 +1240,12 @@ unsigned char *rans_compress_O1_32x16(unsigned char *in, unsigned int in_size,
 
 	cp += encode_freq_d(cp, F0, F[i]);
 
+//	fprintf(stderr, "Normalise shift T[%d]=%d shift=%d\n", i, T[i], shift);
 	normalise_freq_shift(F[i], T[i], 1<<shift); T[i]=1<<shift;
 
 	uint32_t *F_i_ = F[i];
 	for (x = j = 0; j < 256; j++) {
+//	    fprintf(stderr, "x=%d F[%d][%d]=%d shift=%d\n", x, i, j, F_i_[j], shift);
 	    RansEncSymbolInit(&syms[i][j], x, F_i_[j], shift);
 	    x += F_i_[j];
 	}
@@ -1341,6 +1350,21 @@ unsigned char *rans_uncompress_O1_32x16(unsigned char *in, unsigned int in_size,
     uint32_t s3[256][TOTFREQ_O1] __attribute__((aligned(32)));
     uint32_t (*s3F)[TOTFREQ_O1_FAST] = (uint32_t (*)[TOTFREQ_O1_FAST])s3;
 
+#ifdef VALIDATE
+    uint8_t *sfb_ = calloc(256*(TOTFREQ_O1+MAGIC2), sizeof(*sfb_));
+    if (!sfb_)
+	return NULL;
+    fb_t fb[256][256];
+    uint8_t *sfb[256];
+    if ((*cp >> 4) == TF_SHIFT_O1) {
+	for (i = 0; i < 256; i++)
+	    sfb[i]=  sfb_ + i*(TOTFREQ_O1+MAGIC2);
+    } else {
+	for (i = 0; i < 256; i++)
+	    sfb[i]=  sfb_ + i*(TOTFREQ_O1_FAST+MAGIC2);
+    }
+#endif
+
     if (!out)
 	out_free = out = malloc(out_sz);
 
@@ -1396,6 +1420,12 @@ unsigned char *rans_uncompress_O1_32x16(unsigned char *in, unsigned int in_size,
 	// Build symbols; fixme, do as part of decode, see the _d variant
 	for (j = x = 0; j < 256; j++) {
 	    if (F[j]) {
+#ifdef VALIDATE
+		memset(&sfb[i][x], j, F[j]);
+		fb[i][j].f = F[j];
+		fb[i][j].b = x;
+#endif
+
 		int y;
                 for (y = 0; y < F[j]; y++)
 		    // s3 maps [last_sym][Rmask] to next_sym
@@ -1444,6 +1474,15 @@ unsigned char *rans_uncompress_O1_32x16(unsigned char *in, unsigned int in_size,
     for (z = 0; z < NX; z++)
 	iN[z] = z*isz4;
 
+#ifdef VALIDATE
+    RansState R_[NX];
+    int i4[NX], l[NX] = {0};
+    for (z = 0; z < NX; z++) {
+	R_[z] = R[z];
+	i4[z] = iN[z];
+    }
+#endif
+
     uint16_t *sp = (uint16_t *)ptr;
     const uint32_t mask = (1u << shift)-1;
 
@@ -1458,6 +1497,9 @@ unsigned char *rans_uncompress_O1_32x16(unsigned char *in, unsigned int in_size,
     int tidx = 0;
 
     if (shift == TF_SHIFT_O1) {
+#ifdef VALIDATE
+	const uint32_t mask = ((1u << TF_SHIFT_O1)-1);
+#endif
 	for (; iN[0] < isz4; ) {
 	    // m[z] = R[z] & mask;
 	    __m256i masked1 = _mm256_and_si256(Rv1, maskv);
@@ -1467,6 +1509,7 @@ unsigned char *rans_uncompress_O1_32x16(unsigned char *in, unsigned int in_size,
 	    Lv1 = _mm256_slli_epi32(Lv1, TF_SHIFT_O1);
 	    masked1 = _mm256_add_epi32(masked1, Lv1);
 
+	    __m256i l2_tmp = Lv2;
 	    Lv2 = _mm256_slli_epi32(Lv2, TF_SHIFT_O1);
 	    masked2 = _mm256_add_epi32(masked2, Lv2);
 
@@ -1486,29 +1529,6 @@ unsigned char *rans_uncompress_O1_32x16(unsigned char *in, unsigned int in_size,
 	    __m256i fv1 = _mm256_srli_epi32(Sv1, TF_SHIFT_O1+8);
 	    __m256i fv2 = _mm256_srli_epi32(Sv2, TF_SHIFT_O1+8);
 
-	    //	// 12-bit fv may mean F==4096 wrapping to F==0 as no longer fitting.
-	    //	uint32_t y[8];
-	    //	_mm256_storeu_si256((__m256i *)y, fv1);
-	    //	printf("< %04x %04x %04x %04x %04x %04x %04x %04x\n",
-	    //	       y[0], y[1], y[2], y[3], y[4], y[5], y[6], y[7]);
-	    //	for (z=0;z<8;z++)
-	    //	    if (!y[z]) y[z]=TOTFREQ_O1;
-	    //	printf("> %04x %04x %04x %04x %04x %04x %04x %04x\n",
-	    //	       y[0], y[1], y[2], y[3], y[4], y[5], y[6], y[7]);
-	    //	fv1 = _mm256_loadu_si256((__m256i *)y);
-	    //
-	    //	_mm256_storeu_si256((__m256i *)y, fv2);
-	    //	for (z=0;z<8;z++)
-	    //	    if (!y[z]) y[z]=TOTFREQ_O1;
-	    //	fv2 = _mm256_loadu_si256((__m256i *)y);
-
-	    //	__m256i max_freq = _mm256_set1_epi32(TOTFREQ_O1);
-	    //	__m256i zero = _mm256_setzero_si256();
-	    //	__m256i cmp1 = _mm256_cmpeq_epi32(fv1, zero);
-	    //	fv1 = _mm256_blendv_epi8(fv1, max_freq, cmp1);
-	    //	cmp1 = _mm256_cmpeq_epi32(fv2, zero);
-	    //	fv2 = _mm256_blendv_epi8(fv2, max_freq, cmp1);
-
 	    __m256i Sv3 = _mm256_i32gather_epi32x((int *)&s3[0][0], masked3, sizeof(s3[0][0]));
 	    __m256i Sv4 = _mm256_i32gather_epi32x((int *)&s3[0][0], masked4, sizeof(s3[0][0]));
 
@@ -1526,6 +1546,27 @@ unsigned char *rans_uncompress_O1_32x16(unsigned char *in, unsigned int in_size,
 	    __m256i sv2 = _mm256_and_si256(Sv2, _mm256_set1_epi32(0xff));
 	    __m256i sv3 = _mm256_and_si256(Sv3, _mm256_set1_epi32(0xff));
 	    __m256i sv4 = _mm256_and_si256(Sv4, _mm256_set1_epi32(0xff));
+
+	    if (1) {
+		// A maximum frequency of 4096 doesn't fit in our s3 array.
+		// as it's 12 bit + 12 bit + 8 bit.  It wraps around to zero.
+		// (We don't have this issue for TOTFREQ_O1_FAST.)
+		//
+		// Solution 1 is to change to spec to forbid freq of 4096.
+		// Easy hack is to add an extra symbol so it sums correctly.
+		// => 572 MB/s on q40 (deskpro).
+		//
+		// Solution 2 implemented here is to look for the wrap around
+		// and fix it.
+		// => 556 MB/s on q40
+		// cope with max freq of 4096.  Only 3% hit
+		__m256i max_freq = _mm256_set1_epi32(TOTFREQ_O1);
+		__m256i zero = _mm256_setzero_si256();
+		__m256i cmp1 = _mm256_cmpeq_epi32(fv1, zero);
+		fv1 = _mm256_blendv_epi8(fv1, max_freq, cmp1);
+		__m256i cmp2 = _mm256_cmpeq_epi32(fv2, zero);
+		fv2 = _mm256_blendv_epi8(fv2, max_freq, cmp2);
+	    }
 
 	    //  R[z] = f[z] * (R[z] >> TF_SHIFT_O1) + b[z];
 	    Rv1 = _mm256_add_epi32(_mm256_mullo_epi32(_mm256_srli_epi32(Rv1,TF_SHIFT_O1),fv1),bv1);
@@ -1580,6 +1621,16 @@ unsigned char *rans_uncompress_O1_32x16(unsigned char *in, unsigned int in_size,
 
 	    // Start loading next batch of normalised states
 	    __m256i Vv3 = _mm256_cvtepu16_epi32(_mm_loadu_si128((__m128i *)sp));
+
+	    if (1) {
+		// cope with max freq of 4096
+		__m256i max_freq = _mm256_set1_epi32(TOTFREQ_O1);
+		__m256i zero = _mm256_setzero_si256();
+		__m256i cmp3 = _mm256_cmpeq_epi32(fv3, zero);
+		fv3 = _mm256_blendv_epi8(fv3, max_freq, cmp3);
+		__m256i cmp4 = _mm256_cmpeq_epi32(fv4, zero);
+		fv4 = _mm256_blendv_epi8(fv4, max_freq, cmp4);
+	    }
 
 	    //  R[z] = f[z] * (R[z] >> TF_SHIFT_O1) + b[z];
 	    Rv3 = _mm256_add_epi32(_mm256_mullo_epi32(_mm256_srli_epi32(Rv3,TF_SHIFT_O1),fv3),bv3);
@@ -1657,6 +1708,54 @@ unsigned char *rans_uncompress_O1_32x16(unsigned char *in, unsigned int in_size,
 
 	    Rv3 = _mm256_blendv_epi8(Rv3, Yv3, renorm_mask3);
 	    Rv4 = _mm256_blendv_epi8(Rv4, Yv4, renorm_mask4);
+
+#ifdef VALIDATE
+	    STORE(Rv, R);
+	    for (z = 0; z < NX; z+=4) {
+		uint16_t m[4], c[4];
+		c[0] = sfb[l[z+0]][m[0] = R_[z+0] & mask];
+		c[1] = sfb[l[z+1]][m[1] = R_[z+1] & mask];
+		c[2] = sfb[l[z+2]][m[2] = R_[z+2] & mask];
+		c[3] = sfb[l[z+3]][m[3] = R_[z+3] & mask];
+		
+		R_[z+0] = fb[l[z+0]][c[0]].f * (R_[z+0]>>TF_SHIFT_O1);
+		R_[z+0] += m[0] - fb[l[z+0]][c[0]].b;
+
+		R_[z+1] = fb[l[z+1]][c[1]].f * (R_[z+1]>>TF_SHIFT_O1);
+		R_[z+1] += m[1] - fb[l[z+1]][c[1]].b;
+
+		R_[z+2] = fb[l[z+2]][c[2]].f * (R_[z+2]>>TF_SHIFT_O1);
+		R_[z+2] += m[2] - fb[l[z+2]][c[2]].b;
+
+		R_[z+3] = fb[l[z+3]][c[3]].f * (R_[z+3]>>TF_SHIFT_O1);
+		R_[z+3] += m[3] - fb[l[z+3]][c[3]].b;
+
+                i4[z+0]++; l[z+0] = c[0];
+                i4[z+1]++; l[z+1] = c[1];
+                i4[z+2]++; l[z+2] = c[2];
+                i4[z+3]++; l[z+3] = c[3];
+
+		if (ptr < ptr_end) {
+		    RansDecRenorm(&R_[z+0], &ptr);
+		    RansDecRenorm(&R_[z+1], &ptr);
+		    RansDecRenorm(&R_[z+2], &ptr);
+		    RansDecRenorm(&R_[z+3], &ptr);
+		} else {
+		    RansDecRenormSafe(&R_[z+0], &ptr, ptr_end+8);
+		    RansDecRenormSafe(&R_[z+1], &ptr, ptr_end+8);
+		    RansDecRenormSafe(&R_[z+2], &ptr, ptr_end+8);
+		    RansDecRenormSafe(&R_[z+3], &ptr, ptr_end+8);
+		}
+	    }
+
+	    for (z = 0; z < NX; z++)
+		if (R[z] != R_[z]) {
+		    fprintf(stderr, "iN[0] %d, z=%d\n", iN[0], z);
+		    abort();
+		}
+	    // assert hits at loop 13503 with z==1.
+	    // sp == ptr+2;  so we've moved on another item.
+#endif
 	}
 
 	STORE(Rv, R);
@@ -1684,6 +1783,8 @@ unsigned char *rans_uncompress_O1_32x16(unsigned char *in, unsigned int in_size,
 	    lN[z] = c;
 	}
     } else {
+	// TF_SHIFT_O1_FAST.  This is the most commonly used variant.
+
 	for (; iN[0] < isz4; ) {
 	    // m[z] = R[z] & mask;
 	    __m256i masked1 = _mm256_and_si256(Rv1, maskv);
@@ -2064,7 +2165,17 @@ unsigned char *rans_uncompress_O1_32x16(unsigned char *in, unsigned int in_size,
 		c[1] = sfb[l[z+1]][m[1] = R[z+1] & mask];
 		c[2] = sfb[l[z+2]][m[2] = R[z+2] & mask];
 		c[3] = sfb[l[z+3]][m[3] = R[z+3] & mask];
-
+		
+		static int line=0;
+		if (z==8 && (++line == 78765||1))
+		    fprintf(stderr, "*l[z+2]=%d R[2]=%d c[2]=%d f=%d b=%d m=%d\n", l[z+2],R[z+2], c[2],fb[l[z+2]][c[2]].f, fb[l[z+2]][c[2]].b, m[2]);
+		if (z==8) fprintf(stderr, "%d\n", fb[l[z+2]][c[2]].f);
+//		fprintf(stderr, "%d %d %d %d\n",
+//			z,
+//			fb[l[z+0]][c[0]].f,
+//			fb[l[z+1]][c[1]].f,
+//			fb[l[z+2]][c[2]].f,
+//			fb[l[z+3]][c[3]].f);
 		R[z+0] = fb[l[z+0]][c[0]].f * (R[z+0]>>TF_SHIFT_O1);
 		R[z+0] += m[0] - fb[l[z+0]][c[0]].b;
 
@@ -2073,6 +2184,8 @@ unsigned char *rans_uncompress_O1_32x16(unsigned char *in, unsigned int in_size,
 
 		R[z+2] = fb[l[z+2]][c[2]].f * (R[z+2]>>TF_SHIFT_O1);
 		R[z+2] += m[2] - fb[l[z+2]][c[2]].b;
+		if (z==8)
+		    fprintf(stderr, "R[z+2]=%d\n", R[z+2]);
 
 		R[z+3] = fb[l[z+3]][c[3]].f * (R[z+3]>>TF_SHIFT_O1);
 		R[z+3] += m[3] - fb[l[z+3]][c[3]].b;
