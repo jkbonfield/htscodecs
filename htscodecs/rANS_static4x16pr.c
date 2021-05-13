@@ -133,6 +133,8 @@ static int normalise_freq(uint32_t *F, int size, uint32_t tot) {
 	if ((F[j] = (F[j]*tr)>>31) == 0)
 	    F[j] = 1;
 	size += F[j];
+//	if (F[j] == tot)
+//	    F[j]--;
     }
 
     int adjust = tot - size;
