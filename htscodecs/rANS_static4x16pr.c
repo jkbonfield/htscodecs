@@ -1220,8 +1220,8 @@ unsigned char *rans_compress_to_4x16(unsigned char *in,  unsigned int in_size,
 
     unsigned char *out_end = out + *out_size;
 
-//    if (in_size >= 10000)
-//	order |= X_32;
+    if (in_size >= 10000 && !(order & X_STRIPE))
+	order |= X_32;
 
     if (in_size <= 20)
 	order &= ~X_STRIPE;

@@ -85,6 +85,7 @@ int main(void) {
  * The encoder side seems to make no difference either way or be very marginal.
  */
 
+#ifdef USE_AVX2_DEC
 #define _ 9
 static uint32_t permute[256][8] __attribute__((aligned(32))) = { // reverse binary bit order
   { _,_,_,_,_,_,_,_,},
@@ -344,7 +345,9 @@ static uint32_t permute[256][8] __attribute__((aligned(32))) = { // reverse bina
   { _,0,1,2,3,4,5,6,},
   { 0,1,2,3,4,5,6,7,},
 };
+#endif
 
+#ifdef USE_AVX2_ENC
 static uint32_t permutec[256][8] __attribute__((aligned(32))) = { // reverse binary bit order
   { _,_,_,_,_,_,_,_,},
   { _,_,_,_,_,_,_,0,},
@@ -603,3 +606,5 @@ static uint32_t permutec[256][8] __attribute__((aligned(32))) = { // reverse bin
   { _,1,2,3,4,5,6,7,},
   { 0,1,2,3,4,5,6,7,},
 };
+#endif
+

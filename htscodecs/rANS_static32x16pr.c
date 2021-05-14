@@ -2158,7 +2158,6 @@ unsigned char *rans_uncompress_O1_32x16(unsigned char *in, unsigned int in_size,
 
     int isz4 = out_sz/NX;
     int i4[NX], l[NX] = {0};
-    uint8_t c[NX] = {0};
     for (z = 0; z < NX; z++)
 	i4[z] = z*isz4;
 
@@ -2219,12 +2218,10 @@ unsigned char *rans_uncompress_O1_32x16(unsigned char *in, unsigned int in_size,
     } else {
 	// TF_SHIFT_O1 = 10
 	const uint32_t mask = ((1u << TF_SHIFT_O1_FAST)-1);
-	uint8_t o0[NX], o1[NX], o2[NX], o3[NX];
 	for (; i4[0] < isz4;) {
 	    for (z = 0; z < NX; z+=4) {
-		uint16_t m[4], c[4];
-
 #if 0
+		uint16_t m[4], c[4];
 		// We use this for TF_SHIFT_O1 as the lookup table on m is
 		// large, plus we have the wrap-around problem to fix up.
 		// But for 10-bit TF_SHIFT_O1_FAST we can merge sfb and
