@@ -1427,12 +1427,14 @@ unsigned char *rans_uncompress_O1_32x16(unsigned char *in, unsigned int in_size,
 #endif
 
 		int y;
-                for (y = 0; y < F[j]; y++)
+                for (y = 0; y < F[j]; y++) {
 		    // s3 maps [last_sym][Rmask] to next_sym
 		    if(shift == TF_SHIFT_O1)
 			s3[i][y+x] = (((uint32_t)F[j])<<(shift+8)) | (y<<8) | j;
 		    else
+			// smaller matrix for better cache
 			s3F[i][y+x] = (((uint32_t)F[j])<<(shift+8)) | (y<<8) | j;
+		}
 
 		x += F[j];
             }
@@ -2048,6 +2050,7 @@ unsigned char *rans_uncompress_O1_32x16(unsigned char *in, unsigned int in_size,
 #else
     uint8_t *sfb_ = calloc(256*(TOTFREQ_O1+MAGIC2), sizeof(*sfb_));
 #endif
+    uint32_t s3[256][TOTFREQ_O1_FAST];
 
     if (!sfb_)
 	return NULL;
@@ -2119,9 +2122,16 @@ unsigned char *rans_uncompress_O1_32x16(unsigned char *in, unsigned int in_size,
 		if (F[j] > (1<<shift) - x)
 		    goto err;
 
-		memset(&sfb[i][x], j, F[j]);
-		fb[i][j].f = F[j];
-		fb[i][j].b = x;
+		if (shift == TF_SHIFT_O1_FAST) {
+		    int y;
+		    for (y = 0; y < F[j]; y++)
+			s3[i][y+x] = (((uint32_t)F[j])<<(shift+8)) |(y<<8) |j;
+		} else {
+		    memset(&sfb[i][x], j, F[j]);
+		    fb[i][j].f = F[j];
+		    fb[i][j].b = x;
+		}
+
 		x += F[j];
 	    }
 	}
@@ -2166,16 +2176,6 @@ unsigned char *rans_uncompress_O1_32x16(unsigned char *in, unsigned int in_size,
 		c[2] = sfb[l[z+2]][m[2] = R[z+2] & mask];
 		c[3] = sfb[l[z+3]][m[3] = R[z+3] & mask];
 		
-		static int line=0;
-		if (z==8 && (++line == 78765||1))
-		    fprintf(stderr, "*l[z+2]=%d R[2]=%d c[2]=%d f=%d b=%d m=%d\n", l[z+2],R[z+2], c[2],fb[l[z+2]][c[2]].f, fb[l[z+2]][c[2]].b, m[2]);
-		if (z==8) fprintf(stderr, "%d\n", fb[l[z+2]][c[2]].f);
-//		fprintf(stderr, "%d %d %d %d\n",
-//			z,
-//			fb[l[z+0]][c[0]].f,
-//			fb[l[z+1]][c[1]].f,
-//			fb[l[z+2]][c[2]].f,
-//			fb[l[z+3]][c[3]].f);
 		R[z+0] = fb[l[z+0]][c[0]].f * (R[z+0]>>TF_SHIFT_O1);
 		R[z+0] += m[0] - fb[l[z+0]][c[0]].b;
 
@@ -2184,8 +2184,6 @@ unsigned char *rans_uncompress_O1_32x16(unsigned char *in, unsigned int in_size,
 
 		R[z+2] = fb[l[z+2]][c[2]].f * (R[z+2]>>TF_SHIFT_O1);
 		R[z+2] += m[2] - fb[l[z+2]][c[2]].b;
-		if (z==8)
-		    fprintf(stderr, "R[z+2]=%d\n", R[z+2]);
 
 		R[z+3] = fb[l[z+3]][c[3]].f * (R[z+3]>>TF_SHIFT_O1);
 		R[z+3] += m[3] - fb[l[z+3]][c[3]].b;
@@ -2221,9 +2219,16 @@ unsigned char *rans_uncompress_O1_32x16(unsigned char *in, unsigned int in_size,
     } else {
 	// TF_SHIFT_O1 = 10
 	const uint32_t mask = ((1u << TF_SHIFT_O1_FAST)-1);
+	uint8_t o0[NX], o1[NX], o2[NX], o3[NX];
 	for (; i4[0] < isz4;) {
 	    for (z = 0; z < NX; z+=4) {
 		uint16_t m[4], c[4];
+
+#if 0
+		// We use this for TF_SHIFT_O1 as the lookup table on m is
+		// large, plus we have the wrap-around problem to fix up.
+		// But for 10-bit TF_SHIFT_O1_FAST we can merge sfb and
+		// fb into a single lookup table.  See below.
 
 		c[0] = sfb[l[z+0]][m[0] = R[z+0] & mask];
 		c[1] = sfb[l[z+1]][m[1] = R[z+1] & mask];
@@ -2246,6 +2251,39 @@ unsigned char *rans_uncompress_O1_32x16(unsigned char *in, unsigned int in_size,
 		out[i4[z+1]++] = l[z+1] = c[1];
 		out[i4[z+2]++] = l[z+2] = c[2];
 		out[i4[z+3]++] = l[z+3] = c[3];
+#else
+		// Merged sfb and fb into single s3 lookup.
+		// The m[4] array completely vanishes in this method.
+		uint32_t S[4] = {
+		    s3[l[z+0]][R[z+0] & mask],
+		    s3[l[z+1]][R[z+1] & mask],
+		    s3[l[z+2]][R[z+2] & mask],
+		    s3[l[z+3]][R[z+3] & mask],
+		};
+
+		l[z+0] = out[i4[z+0]++] = S[0];
+		l[z+1] = out[i4[z+1]++] = S[1];
+		l[z+2] = out[i4[z+2]++] = S[2];
+		l[z+3] = out[i4[z+3]++] = S[3];
+
+		uint32_t F[4] = {
+		    S[0]>>(TF_SHIFT_O1_FAST+8),
+		    S[1]>>(TF_SHIFT_O1_FAST+8),
+		    S[2]>>(TF_SHIFT_O1_FAST+8),
+		    S[3]>>(TF_SHIFT_O1_FAST+8),
+	        };
+		uint32_t B[4] = {
+		    (S[0]>>8) & mask,
+		    (S[1]>>8) & mask,
+		    (S[2]>>8) & mask,
+		    (S[3]>>8) & mask,
+	        };
+
+		R[z+0] = F[0] * (R[z+0]>>TF_SHIFT_O1_FAST) + B[0];
+		R[z+1] = F[1] * (R[z+1]>>TF_SHIFT_O1_FAST) + B[1];
+		R[z+2] = F[2] * (R[z+2]>>TF_SHIFT_O1_FAST) + B[2];
+		R[z+3] = F[3] * (R[z+3]>>TF_SHIFT_O1_FAST) + B[3];
+#endif
 
 		if (ptr < ptr_end) {
 		    RansDecRenorm(&R[z+0], &ptr);
@@ -2263,12 +2301,20 @@ unsigned char *rans_uncompress_O1_32x16(unsigned char *in, unsigned int in_size,
 
 	// Remainder
 	for (; i4[NX-1] < out_sz; i4[NX-1]++) {
+#if 0
 	    uint32_t m = R[NX-1] & ((1u<<TF_SHIFT_O1_FAST)-1);
 	    unsigned char c = sfb[l[NX-1]][m];
 	    out[i4[NX-1]] = c;
 	    R[NX-1] = fb[l[NX-1]][c].f * (R[NX-1]>>TF_SHIFT_O1_FAST) + m - fb[l[NX-1]][c].b;
 	    RansDecRenormSafe(&R[NX-1], &ptr, ptr_end + 8);
 	    l[NX-1] = c;
+#else
+	    uint32_t S = s3[l[NX-1]][R[NX-1] & ((1u<<TF_SHIFT_O1_FAST)-1)];
+	    out[i4[NX-1]] = l[NX-1] = S&0xff;
+	    R[NX-1] = (S>>(TF_SHIFT_O1_FAST+8)) * (R[NX-1]>>TF_SHIFT_O1_FAST)
+		+ ((S>>8) & ((1u<<TF_SHIFT_O1_FAST)-1));
+	    RansDecRenormSafe(&R[NX-1], &ptr, ptr_end + 8);
+#endif
 	}
     }
     //fprintf(stderr, "    1 Decoded %d bytes\n", (int)(ptr-in)); //c-size
