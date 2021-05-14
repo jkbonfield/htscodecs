@@ -497,10 +497,6 @@ unsigned char *rans_compress_O0_4x16(unsigned char *in, unsigned int in_size,
     return out;
 }
 
-typedef struct {
-    unsigned char R[TOTFREQ];
-} ari_decoder;
-
 static
 unsigned char *rans_uncompress_O0_4x16(unsigned char *in, unsigned int in_size,
 				       unsigned char *out, unsigned int out_sz) {
@@ -919,6 +915,10 @@ unsigned char *rans_uncompress_O1_4x16(unsigned char *in, unsigned int in_size,
 #else
     uint8_t *sfb_ = calloc(256*(TOTFREQ_O1+MAGIC2), sizeof(*sfb_));
 #endif
+    uint32_t (*s3)[TOTFREQ_O1_FAST] = (uint32_t (*)[TOTFREQ_O1_FAST])sfb_;
+    // reuse the same memory for the fast mode lookup, but this only works
+    // if we're on e.g. 12-bit freqs vs 10-bit freqs as needs 4x larger array.
+    //uint32_t s3[256][TOTFREQ_O1_FAST];
 
     if (!sfb_)
 	return NULL;
@@ -967,6 +967,8 @@ unsigned char *rans_uncompress_O1_4x16(unsigned char *in, unsigned int in_size,
     if (cp >= c_freq_end)
 	goto err;
 
+    const int s3_fast_on = in_size >= 100000;
+
     for (i = 0; i < 256; i++) {
 	if (F0[i] == 0)
 	    continue;
@@ -990,9 +992,15 @@ unsigned char *rans_uncompress_O1_4x16(unsigned char *in, unsigned int in_size,
 		if (F[j] > (1<<shift) - x)
 		    goto err;
 
-		memset(&sfb[i][x], j, F[j]);
-		fb[i][j].f = F[j];
-		fb[i][j].b = x;
+		if (shift == TF_SHIFT_O1_FAST && s3_fast_on) {
+		    int y;
+		    for (y = 0; y < F[j]; y++)
+			s3[i][y+x] = (((uint32_t)F[j])<<(shift+8)) |(y<<8) |j;
+		} else {
+		    memset(&sfb[i][x], j, F[j]);
+		    fb[i][j].f = F[j];
+		    fb[i][j].b = x;
+		}
 		x += F[j];
 	    }
 	}
@@ -1071,8 +1079,10 @@ unsigned char *rans_uncompress_O1_4x16(unsigned char *in, unsigned int in_size,
 	    RansDecRenormSafe(&R[3], &ptr, ptr_end + 8);
 	    l3 = c3;
 	}
-    } else {
-	// TF_SHIFT_O1 = 10
+    } else if (!s3_fast_on) {
+	// TF_SHIFT_O1 = 10 with sfb[256][1024] & fb[256]256] array lookup
+	// Slightly faster for -o193 on q4 (high comp), but also less
+	// initialisation cost for smaller data
 	const uint32_t mask = ((1u << TF_SHIFT_O1_FAST)-1);
 	for (; i4[0] < isz4; i4[0]++, i4[1]++, i4[2]++, i4[3]++) {
 	    uint16_t m, c;
@@ -1113,6 +1123,57 @@ unsigned char *rans_uncompress_O1_4x16(unsigned char *in, unsigned int in_size,
 	    R[3] = fb[l3][c3].f * (R[3]>>TF_SHIFT_O1_FAST) + m3 - fb[l3][c3].b;
 	    RansDecRenormSafe(&R[3], &ptr, ptr_end + 8);
 	    l3 = c3;
+	}
+    } else {
+	// TF_SHIFT_O1_FAST.
+	// Significantly faster for -o1 on q40 (low comp).
+	// Higher initialisation cost, so only use if big blocks.
+	const uint32_t mask = ((1u << TF_SHIFT_O1_FAST)-1);
+	for (; i4[0] < isz4; i4[0]++, i4[1]++, i4[2]++, i4[3]++) {
+	    uint32_t S0 = s3[l0][R[0] & mask];
+	    uint32_t S1 = s3[l1][R[1] & mask];
+	    l0 = out[i4[0]] = S0;
+	    l1 = out[i4[1]] = S1;
+	    uint16_t F0 = S0>>(TF_SHIFT_O1_FAST+8);
+	    uint16_t F1 = S1>>(TF_SHIFT_O1_FAST+8);
+	    uint16_t B0 = (S0>>8) & mask;
+	    uint16_t B1 = (S1>>8) & mask;
+
+	    R[0] = F0 * (R[0]>>TF_SHIFT_O1_FAST) + B0;
+	    R[1] = F1 * (R[1]>>TF_SHIFT_O1_FAST) + B1;
+
+	    uint32_t S2 = s3[l2][R[2] & mask];
+	    uint32_t S3 = s3[l3][R[3] & mask];
+	    l2 = out[i4[2]] = S2;
+	    l3 = out[i4[3]] = S3;
+	    uint16_t F2 = S2>>(TF_SHIFT_O1_FAST+8);
+	    uint16_t F3 = S3>>(TF_SHIFT_O1_FAST+8);
+	    uint16_t B2 = (S2>>8) & mask;
+	    uint16_t B3 = (S3>>8) & mask;
+
+	    R[2] = F2 * (R[2]>>TF_SHIFT_O1_FAST) + B2;
+	    R[3] = F3 * (R[3]>>TF_SHIFT_O1_FAST) + B3;
+
+	    if (ptr < ptr_end) {
+		RansDecRenorm(&R[0], &ptr);
+		RansDecRenorm(&R[1], &ptr);
+		RansDecRenorm(&R[2], &ptr);
+		RansDecRenorm(&R[3], &ptr);
+	    } else {
+		RansDecRenormSafe(&R[0], &ptr, ptr_end+8);
+		RansDecRenormSafe(&R[1], &ptr, ptr_end+8);
+		RansDecRenormSafe(&R[2], &ptr, ptr_end+8);
+		RansDecRenormSafe(&R[3], &ptr, ptr_end+8);
+	    }
+	}
+
+	// Remainder
+	for (; i4[3] < out_sz; i4[3]++) {
+	    uint32_t S = s3[l3][R[3] & ((1u<<TF_SHIFT_O1_FAST)-1)];
+	    l3 = out[i4[3]] = S;
+	    R[3] = (S>>(TF_SHIFT_O1_FAST+8)) * (R[3]>>TF_SHIFT_O1_FAST)
+		+ ((S>>8) & ((1u<<TF_SHIFT_O1_FAST)-1));
+	    RansDecRenormSafe(&R[3], &ptr, ptr_end + 8);
 	}
     }
     //fprintf(stderr, "    1 Decoded %d bytes\n", (int)(ptr-in)); //c-size
