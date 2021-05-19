@@ -82,6 +82,49 @@ extern void rans_tls_init(void);
 
 #define NX 32
 
+// Hist8 with a crude entropy (bits / byte) estimator.
+static inline
+double hist8e(unsigned char *in, unsigned int in_size, uint32_t F0[256]) {
+    uint32_t F1[256+MAGIC] = {0}, F2[256+MAGIC] = {0}, F3[256+MAGIC] = {0};
+    uint32_t F4[256+MAGIC] = {0}, F5[256+MAGIC] = {0}, F6[256+MAGIC] = {0};
+    uint32_t F7[256+MAGIC] = {0};
+
+#ifdef __GNUC__
+    double e = 0, in_size_r2 = log(1.0/in_size)/log(2);
+#else
+    double e = 0, in_size_r2 = log(1.0/in_size);
+#endif
+
+    unsigned int i, i8 = in_size & ~7;
+    for (i = 0; i < i8; i+=8) {
+	F0[in[i+0]]++;
+	F1[in[i+1]]++;
+	F2[in[i+2]]++;
+	F3[in[i+3]]++;
+	F4[in[i+4]]++;
+	F5[in[i+5]]++;
+	F6[in[i+6]]++;
+	F7[in[i+7]]++;
+    }
+    while (i < in_size)
+	F0[in[i++]]++;
+
+    for (i = 0; i < 256; i++) {
+	F0[i] += F1[i] + F2[i] + F3[i] + F4[i] + F5[i] + F6[i] + F7[i];
+#ifdef __GNUC__
+	e -= F0[i] * (32 - __builtin_clz(F0[i]) + in_size_r2);
+#else
+	extern double fast_log(double);
+	e -= F0[i] * (fast_log(F0[i]) + in_size_r2);
+#endif
+    }
+
+#ifndef __GNUC__
+    e /= log(2);
+#endif
+    return e/in_size;
+}
+
 unsigned char *rans_compress_O0_32x16(unsigned char *in, unsigned int in_size,
 				      unsigned char *out, unsigned int *out_size) {
     unsigned char *cp, *out_end;
@@ -109,7 +152,9 @@ unsigned char *rans_compress_O0_32x16(unsigned char *in, unsigned int in_size,
 	goto empty;
 
     // Compute statistics
-    hist8(in, in_size, F);
+    double e = hist8e(in, in_size, F);
+    int low_ent = e < 2;
+    //hist8(in, in_size, F); int low_ent = 0;
 
     // Normalise so frequences sum to power of 2
     uint32_t fsum = in_size;
@@ -144,31 +189,57 @@ unsigned char *rans_compress_O0_32x16(unsigned char *in, unsigned int in_size,
     while (z-- > 0)
       RansEncPutSymbol(&ransN[z], &ptr, &syms[in[in_size-(i-z)]]);
 
-    for (i=(in_size &~(NX-1)); i>0; i-=NX) {
-      for (z = NX-1; z >= 0; z-=4) {
-	RansEncSymbol *s0 = &syms[in[i-(NX-z+0)]];
-	RansEncSymbol *s1 = &syms[in[i-(NX-z+1)]];
-	RansEncSymbol *s2 = &syms[in[i-(NX-z+2)]];
-	RansEncSymbol *s3 = &syms[in[i-(NX-z+3)]];
-	RansEncPutSymbol(&ransN[z-0], &ptr, s0);
-	RansEncPutSymbol(&ransN[z-1], &ptr, s1);
-	RansEncPutSymbol(&ransN[z-2], &ptr, s2);
-	RansEncPutSymbol(&ransN[z-3], &ptr, s3);
-	if (NX%8 == 0) {
-	    z -= 4;
-	    RansEncSymbol *s0 = &syms[in[i-(NX-z+0)]];
-	    RansEncSymbol *s1 = &syms[in[i-(NX-z+1)]];
-	    RansEncSymbol *s2 = &syms[in[i-(NX-z+2)]];
-	    RansEncSymbol *s3 = &syms[in[i-(NX-z+3)]];
-	    RansEncPutSymbol(&ransN[z-0], &ptr, s0);
-	    RansEncPutSymbol(&ransN[z-1], &ptr, s1);
-	    RansEncPutSymbol(&ransN[z-2], &ptr, s2);
-	    RansEncPutSymbol(&ransN[z-3], &ptr, s3);
+    if (low_ent) {
+	for (i=(in_size &~(NX-1)); i>0; i-=NX) {
+	    for (z = NX-1; z >= 0; z-=4) {
+		RansEncSymbol *s0 = &syms[in[i-(NX-z+0)]];
+		RansEncSymbol *s1 = &syms[in[i-(NX-z+1)]];
+		RansEncSymbol *s2 = &syms[in[i-(NX-z+2)]];
+		RansEncSymbol *s3 = &syms[in[i-(NX-z+3)]];
+		RansEncPutSymbol_branched(&ransN[z-0], &ptr, s0);
+		RansEncPutSymbol_branched(&ransN[z-1], &ptr, s1);
+		RansEncPutSymbol_branched(&ransN[z-2], &ptr, s2);
+		RansEncPutSymbol_branched(&ransN[z-3], &ptr, s3);
+		if (NX%8 == 0) {
+		    z -= 4;
+		    RansEncSymbol *s0 = &syms[in[i-(NX-z+0)]];
+		    RansEncSymbol *s1 = &syms[in[i-(NX-z+1)]];
+		    RansEncSymbol *s2 = &syms[in[i-(NX-z+2)]];
+		    RansEncSymbol *s3 = &syms[in[i-(NX-z+3)]];
+		    RansEncPutSymbol_branched(&ransN[z-0], &ptr, s0);
+		    RansEncPutSymbol_branched(&ransN[z-1], &ptr, s1);
+		    RansEncPutSymbol_branched(&ransN[z-2], &ptr, s2);
+		    RansEncPutSymbol_branched(&ransN[z-3], &ptr, s3);
+		}
+	    }
+	    if (z < -1) abort();
 	}
-      }
-      if (z < -1) abort();
+    } else {
+	for (i=(in_size &~(NX-1)); i>0; i-=NX) {
+	    for (z = NX-1; z >= 0; z-=4) {
+		RansEncSymbol *s0 = &syms[in[i-(NX-z+0)]];
+		RansEncSymbol *s1 = &syms[in[i-(NX-z+1)]];
+		RansEncSymbol *s2 = &syms[in[i-(NX-z+2)]];
+		RansEncSymbol *s3 = &syms[in[i-(NX-z+3)]];
+		RansEncPutSymbol(&ransN[z-0], &ptr, s0);
+		RansEncPutSymbol(&ransN[z-1], &ptr, s1);
+		RansEncPutSymbol(&ransN[z-2], &ptr, s2);
+		RansEncPutSymbol(&ransN[z-3], &ptr, s3);
+		if (NX%8 == 0) {
+		    z -= 4;
+		    RansEncSymbol *s0 = &syms[in[i-(NX-z+0)]];
+		    RansEncSymbol *s1 = &syms[in[i-(NX-z+1)]];
+		    RansEncSymbol *s2 = &syms[in[i-(NX-z+2)]];
+		    RansEncSymbol *s3 = &syms[in[i-(NX-z+3)]];
+		    RansEncPutSymbol(&ransN[z-0], &ptr, s0);
+		    RansEncPutSymbol(&ransN[z-1], &ptr, s1);
+		    RansEncPutSymbol(&ransN[z-2], &ptr, s2);
+		    RansEncPutSymbol(&ransN[z-3], &ptr, s3);
+		}
+	    }
+	    if (z < -1) abort();
+	}
     }
-
     for (z = NX-1; z >= 0; z--)
       RansEncFlush(&ransN[z], &ptr);
 
