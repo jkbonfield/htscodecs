@@ -175,12 +175,20 @@ typedef struct {
     // NB: This pair are read as a 32-bit value by the SIMD o1 encoder.
     uint16_t cmpl_freq; // Complement of frequency: (1 << scale_bits) - freq
     uint16_t rcp_shift; // Reciprocal shift
-
-    // FIXME: temporary
-    uint16_t scale_bits;
-    uint16_t freq;
-    uint16_t start;
 } RansEncSymbol;
+
+// As above, but with cmpl_freq and rcp_shift combined into
+// a single value.  This could be done with a cast, but it avoids
+// a type punning error.  We could use a union, but anonymous unions
+// are C11 only (still that's 10 year old!).  For now we just cheat
+// instead.
+typedef struct {
+    uint32_t x_max;     // (Exclusive) upper bound of pre-normalization interval
+    uint32_t rcp_freq;  // Fixed-point reciprocal frequency
+    uint32_t bias;      // Bias
+
+    uint32_t cmpl_freq; // cmpl_freq+rcp_shift
+} RansEncSymbol_simd;
 
 // Decoder symbols are straightforward.
 typedef struct {
@@ -212,11 +220,6 @@ static inline void RansEncSymbolInit(RansEncSymbol* s, uint32_t start, uint32_t 
     // set up our parameters such that the original encoder and
     // the fast encoder agree.
     
-    // FIXME: temporary
-    s->scale_bits = scale_bits;
-    s->freq = freq;
-    s->start = start;
-
     s->x_max = ((RANS_BYTE_L >> scale_bits) << 16) * freq -1;
     s->cmpl_freq = (uint16_t) ((1 << scale_bits) - freq);
     if (freq < 2) {
@@ -289,11 +292,91 @@ static inline void RansEncPutSymbol(RansState* r, uint8_t** pptr, RansEncSymbol 
     uint32_t x_max = sym->x_max;
 
 #ifdef HTSCODECS_LITTLE_ENDIAN
+    // Branchless renorm.
+    //
+    // This works best on high entropy data where branch prediction
+    // is poor.
+    //
+    // Note the bit-packing and RLE modes are more likely to be used on
+    // low entropy data, making this assertion generally true.
+    // TODO: maybe have two different variants, and a detection mechanism
+    // based on freq table to work out which method would be most efficient?
+#if 1
+    int c = x > x_max;
+    uint16_t* ptr = *(uint16_t **)pptr;
+    ptr[-1] = x & 0xffff;
+    *pptr = (uint8_t *)(ptr-c);
+    x >>= c*16;
+#else
+    // The old non-branchless method
     if (x > x_max) {
 	(*pptr) -= 2;
         **(uint16_t **)pptr = x;
 	x >>= 16;
     }
+#endif
+
+#else
+    if (x > x_max) {
+	uint8_t* ptr = *pptr;
+        ptr -= 2;
+	ptr[0] = x & 0xff;
+	ptr[1] = (x >> 8) & 0xff;
+	x >>= 16;
+	*pptr = ptr;
+    }
+#endif
+
+    // x = C(s,x)
+    // NOTE: written this way so we get a 32-bit "multiply high" when
+    // available. If you're on a 64-bit platform with cheap multiplies
+    // (e.g. x64), just bake the +32 into rcp_shift.
+    //uint32_t q = (uint32_t) (((uint64_t)x * sym->rcp_freq) >> 32) >> sym->rcp_shift;
+
+    // Slow method, but robust
+//    *r = ((x / sym->freq) << sym->scale_bits) + (x % sym->freq) + sym->start;
+//    return;
+
+    // The extra >>32 has already been added to RansEncSymbolInit
+    uint32_t q = (uint32_t) (((uint64_t)x * sym->rcp_freq) >> sym->rcp_shift);
+    *r = x + sym->bias + q * sym->cmpl_freq;
+
+//    assert(((x / sym->freq) << sym->scale_bits) + (x % sym->freq) + sym->start == *r);
+}
+
+static inline void RansEncPutSymbol_old(RansState* r, uint8_t** pptr, RansEncSymbol const* sym)
+{
+    //RansAssert(sym->x_max != 0); // can't encode symbol with freq=0
+
+    // renormalize
+    uint32_t x = *r;
+    uint32_t x_max = sym->x_max;
+
+#ifdef HTSCODECS_LITTLE_ENDIAN
+    // Branchless renorm.
+    //
+    // This works best on high entropy data where branch prediction
+    // is poor.
+    //
+    // Note the bit-packing and RLE modes are more likely to be used on
+    // low entropy data, making this assertion generally true.
+    // TODO: maybe have two different variants, and a detection mechanism
+    // based on freq table to work out which method would be most efficient?
+#if 0
+    int c = x > x_max;
+    uint16_t* ptr = *(uint16_t **)pptr;
+    ptr[-1] = x & 0xffff;
+    *pptr = (uint8_t *)(ptr-c);
+    x >>= c*16;
+#else
+    // The old non-branchless method
+    if (x > x_max) {
+	(*pptr) -= 2;
+        **(uint16_t **)pptr = x;
+	x >>= 16;
+    }
+#endif
+
 #else
     if (x > x_max) {
 	uint8_t* ptr = *pptr;
