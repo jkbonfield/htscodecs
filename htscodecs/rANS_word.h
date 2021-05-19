@@ -301,21 +301,11 @@ static inline void RansEncPutSymbol(RansState* r, uint8_t** pptr, RansEncSymbol 
     // low entropy data, making this assertion generally true.
     // TODO: maybe have two different variants, and a detection mechanism
     // based on freq table to work out which method would be most efficient?
-#if 1
     int c = x > x_max;
     uint16_t* ptr = *(uint16_t **)pptr;
     ptr[-1] = x & 0xffff;
     *pptr = (uint8_t *)(ptr-c);
     x >>= c*16;
-#else
-    // The old non-branchless method
-    if (x > x_max) {
-	(*pptr) -= 2;
-        **(uint16_t **)pptr = x;
-	x >>= 16;
-    }
-#endif
-
 #else
     if (x > x_max) {
 	uint8_t* ptr = *pptr;
@@ -344,7 +334,7 @@ static inline void RansEncPutSymbol(RansState* r, uint8_t** pptr, RansEncSymbol 
 //    assert(((x / sym->freq) << sym->scale_bits) + (x % sym->freq) + sym->start == *r);
 }
 
-static inline void RansEncPutSymbol_old(RansState* r, uint8_t** pptr, RansEncSymbol const* sym)
+static inline void RansEncPutSymbol_branched(RansState* r, uint8_t** pptr, RansEncSymbol const* sym)
 {
     //RansAssert(sym->x_max != 0); // can't encode symbol with freq=0
 
@@ -353,30 +343,12 @@ static inline void RansEncPutSymbol_old(RansState* r, uint8_t** pptr, RansEncSym
     uint32_t x_max = sym->x_max;
 
 #ifdef HTSCODECS_LITTLE_ENDIAN
-    // Branchless renorm.
-    //
-    // This works best on high entropy data where branch prediction
-    // is poor.
-    //
-    // Note the bit-packing and RLE modes are more likely to be used on
-    // low entropy data, making this assertion generally true.
-    // TODO: maybe have two different variants, and a detection mechanism
-    // based on freq table to work out which method would be most efficient?
-#if 0
-    int c = x > x_max;
-    uint16_t* ptr = *(uint16_t **)pptr;
-    ptr[-1] = x & 0xffff;
-    *pptr = (uint8_t *)(ptr-c);
-    x >>= c*16;
-#else
     // The old non-branchless method
     if (x > x_max) {
 	(*pptr) -= 2;
         **(uint16_t **)pptr = x;
 	x >>= 16;
     }
-#endif
-
 #else
     if (x > x_max) {
 	uint8_t* ptr = *pptr;
