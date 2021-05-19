@@ -93,6 +93,7 @@ int main(int argc, char **argv) {
 
     extern char *optarg;
     extern int optind;
+    extern void force_sw32_decoder(void);
 
     while ((opt = getopt(argc, argv, "o:dtr")) != -1) {
 	switch (opt) {
@@ -101,6 +102,8 @@ int main(int argc, char **argv) {
 	    order = strtol(optarg, &optend, 0);
 	    if (*optend == '.')
 		order += atoi(optend+1)<<8;
+	    if (order & 0x400 /*X_SW32_DEC*/)
+		force_sw32_decoder();
 	    break;
 	}
 

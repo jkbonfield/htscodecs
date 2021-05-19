@@ -105,6 +105,12 @@ dnl AC_CHECK_LIB([bsc], [bsc_compress], [
 dnl 	LIBS="-lbsc $LIBS"
 dnl 	AC_DEFINE([HAVE_LIBBSC],1,[Define to 1 if you have the libbsc library.])])
 
+dnl Check if we can use our AVX2 implementations of rANS 4x16 codec.
+AX_CHECK_COMPILE_FLAG([-mavx2], [
+        MAVX2=-mavx2
+	AC_SUBST(MAVX2)
+        AC_DEFINE([HAVE_AVX2],1,[Defined to 1 if the compiler can issue AVX2 instructions.])])
+
 AX_LIBDEFLATE
 
 dnl Checks for header files.
