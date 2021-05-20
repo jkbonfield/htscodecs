@@ -90,7 +90,7 @@
  */
 
 unsigned inline int rans_compress_bound_4x16(unsigned int size, int order) {
-    int N = order>>8;
+    int N = order>>16;
     if (!N) N=4;
 
     order &= 0xff;
@@ -1094,7 +1094,7 @@ unsigned char *rans_compress_to_4x16(unsigned char *in,  unsigned int in_size,
 	order &= ~X_32;
 
     if (order & X_STRIPE) {
-	int N = (order>>8);
+	int N = (order>>16);
 	if (N == 0) N = 4; // default for compatibility with old tests
 
 	if (N > 255)
