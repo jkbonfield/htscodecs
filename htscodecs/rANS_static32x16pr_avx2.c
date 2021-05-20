@@ -983,6 +983,12 @@ unsigned char *rans_uncompress_O1_32x16_avx2(unsigned char *in, unsigned int in_
     uint32_t (*s3F)[TOTFREQ_O1_FAST] = (uint32_t (*)[TOTFREQ_O1_FAST])s3;
 
 #ifdef VALIDATE
+#define MAGIC2 179
+    typedef struct {
+	uint16_t f;
+	uint16_t b;
+    } fb_t;
+
     uint8_t *sfb_ = calloc(256*(TOTFREQ_O1+MAGIC2), sizeof(*sfb_));
     if (!sfb_)
 	return NULL;
@@ -1095,9 +1101,6 @@ unsigned char *rans_uncompress_O1_32x16_avx2(unsigned char *in, unsigned int in_
 
     RansState R[NX] __attribute__((aligned(32)));
     uint8_t *ptr = cp, *ptr_end = in + in_size - 8;
-#ifdef VALIDATE
-    uint8_t *ptr_end = in + in_size - 8;
-#endif
     int z;
     for (z = 0; z < NX; z++) {
 	RansDecInit(&R[z], &ptr);
@@ -1371,6 +1374,11 @@ unsigned char *rans_uncompress_O1_32x16_avx2(unsigned char *in, unsigned int in_
                 i4[z+2]++; l[z+2] = c[2];
                 i4[z+3]++; l[z+3] = c[3];
 
+		//if (c[0] != out[iN[z+0]-1]) abort();
+		//if (c[1] != out[iN[z+1]-1]) abort();
+		//if (c[2] != out[iN[z+2]-1]) abort();
+		//if (c[3] != out[iN[z+3]-1]) abort();
+
 		if (ptr < ptr_end) {
 		    RansDecRenorm(&R_[z+0], &ptr);
 		    RansDecRenorm(&R_[z+1], &ptr);
@@ -1384,16 +1392,17 @@ unsigned char *rans_uncompress_O1_32x16_avx2(unsigned char *in, unsigned int in_
 		}
 	    }
 
-	    for (z = 0; z < NX; z++)
+	    for (z = 0; z < NX; z++) {
 		if (R[z] != R_[z]) {
 		    fprintf(stderr, "iN[0] %d, z=%d\n", iN[0], z);
 		    abort();
 		}
+	    }
 	    // assert hits at loop 13503 with z==1.
 	    // sp == ptr+2;  so we've moved on another item.
 #endif
 	}
-	isz4 -= 64;
+	isz4 += 64;
 
 	STORE(Rv, R);
 	STORE(Lv, lN);
@@ -1412,10 +1421,11 @@ unsigned char *rans_uncompress_O1_32x16_avx2(unsigned char *in, unsigned int in_
 	for (; iN[0] < isz4;) {
 	    for (z = 0; z < NX; z++) {
 		uint32_t m = R[z] & ((1u<<TF_SHIFT_O1)-1);
-		uint32_t S = s3F[lN[z]][m];
+		uint32_t S = s3[lN[z]][m];
 		unsigned char c = S & 0xff;
 		out[iN[z]++] = c;
-		R[z] = (S>>(TF_SHIFT_O1+8)) * (R[z]>>TF_SHIFT_O1) +
+		uint32_t F = S>>(TF_SHIFT_O1+8);
+		R[z] = (F?F:4096) * (R[z]>>TF_SHIFT_O1) +
 		    ((S>>8) & ((1u<<TF_SHIFT_O1)-1));
 		RansDecRenormSafe(&R[z], &ptr, ptr_end+8);
 		lN[z] = c;
@@ -1429,7 +1439,8 @@ unsigned char *rans_uncompress_O1_32x16_avx2(unsigned char *in, unsigned int in_
 	    uint32_t S = s3[lN[z]][m];
 	    unsigned char c = S & 0xff;
 	    out[iN[z]++] = c;
-	    R[z] = (S>>(TF_SHIFT_O1+8)) * (R[z]>>TF_SHIFT_O1) +
+	    uint32_t F = S>>(TF_SHIFT_O1+8);
+	    R[z] = (F?F:4096) * (R[z]>>TF_SHIFT_O1) +
 		((S>>8) & ((1u<<TF_SHIFT_O1)-1));
 	    RansDecRenormSafe(&R[z], &ptr, ptr_end+8);
 	    lN[z] = c;
