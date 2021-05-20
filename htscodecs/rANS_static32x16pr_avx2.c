@@ -932,6 +932,18 @@ unsigned char *rans_compress_O1_32x16_avx2(unsigned char *in, unsigned int in_si
     return out;
 }
 
+#ifndef NO_THREADS
+/*
+ * Thread local storage per thread in the pool.
+ */
+static pthread_once_t rans_once = PTHREAD_ONCE_INIT;
+static pthread_key_t rans_key;
+
+static void rans_tls_init(void) {
+    pthread_key_create(&rans_key, free);
+}
+#endif
+
 unsigned char *rans_uncompress_O1_32x16_avx2(unsigned char *in, unsigned int in_size,
 					     unsigned char *out, unsigned int out_sz) {
     if (in_size < NX*4) // 4-states at least
@@ -950,8 +962,24 @@ unsigned char *rans_uncompress_O1_32x16_avx2(unsigned char *in, unsigned int in_
     unsigned char *c_freq = NULL;
     int i, j = -999;
     unsigned int x;
-    // FIXME: cope with MacOS and small stack. Use pthread_once trick.
-    uint32_t s3[256][TOTFREQ_O1] __attribute__((aligned(32)));
+
+#ifndef NO_THREADS
+    pthread_once(&rans_once, rans_tls_init);
+    uint8_t *s3_ = pthread_getspecific(rans_key);
+    if (!s3_) {
+	s3_ = malloc(256*TOTFREQ_O1*4);
+	if (!s3_)
+	    return NULL;
+	pthread_setspecific(rans_key, s3_);
+    }
+    uint32_t (*s3)[TOTFREQ_O1] = (uint32_t (*)[TOTFREQ_O1])s3_;
+
+#else
+    uint32_t (*s3)[TOTFREQ_O1] = malloc(256*TOTFREQ_O1*4);
+    if (!s3)
+	return NULL;
+#endif
+    //uint32_t s3[256][TOTFREQ_O1] __attribute__((aligned(32)));
     uint32_t (*s3F)[TOTFREQ_O1_FAST] = (uint32_t (*)[TOTFREQ_O1_FAST])s3;
 
 #ifdef VALIDATE
@@ -1066,7 +1094,7 @@ unsigned char *rans_uncompress_O1_32x16_avx2(unsigned char *in, unsigned int in_
 	goto err;
 
     RansState R[NX] __attribute__((aligned(32)));
-    uint8_t *ptr = cp;
+    uint8_t *ptr = cp, *ptr_end = in + in_size - 8;
 #ifdef VALIDATE
     uint8_t *ptr_end = in + in_size - 8;
 #endif
@@ -1078,7 +1106,7 @@ unsigned char *rans_uncompress_O1_32x16_avx2(unsigned char *in, unsigned int in_
     }
 
     int isz4 = out_sz/NX;
-    int iN[NX], lN[NX] = {0};
+    int iN[NX], lN[NX] __attribute__((aligned(32))) = {0};
     for (z = 0; z < NX; z++)
 	iN[z] = z*isz4;
 
@@ -1108,6 +1136,7 @@ unsigned char *rans_uncompress_O1_32x16_avx2(unsigned char *in, unsigned int in_
 #ifdef VALIDATE
 	const uint32_t mask = ((1u << TF_SHIFT_O1)-1);
 #endif
+	isz4 -= 64;
 	for (; iN[0] < isz4; ) {
 	    // m[z] = R[z] & mask;
 	    __m256i masked1 = _mm256_and_si256(Rv1, maskv);
@@ -1364,6 +1393,7 @@ unsigned char *rans_uncompress_O1_32x16_avx2(unsigned char *in, unsigned int in_
 	    // sp == ptr+2;  so we've moved on another item.
 #endif
 	}
+	isz4 -= 64;
 
 	STORE(Rv, R);
 	STORE(Lv, lN);
@@ -1377,6 +1407,21 @@ unsigned char *rans_uncompress_O1_32x16_avx2(unsigned char *in, unsigned int in_
 		    out[iN[z]++] = u.tbuf[T][z];
 	}
 
+	// Scalar version for close to the end of in[] array so we don't
+	// do SIMD loads beyond the end of the buffer
+	for (; iN[0] < isz4;) {
+	    for (z = 0; z < NX; z++) {
+		uint32_t m = R[z] & ((1u<<TF_SHIFT_O1)-1);
+		uint32_t S = s3F[lN[z]][m];
+		unsigned char c = S & 0xff;
+		out[iN[z]++] = c;
+		R[z] = (S>>(TF_SHIFT_O1+8)) * (R[z]>>TF_SHIFT_O1) +
+		    ((S>>8) & ((1u<<TF_SHIFT_O1)-1));
+		RansDecRenormSafe(&R[z], &ptr, ptr_end+8);
+		lN[z] = c;
+	    }
+	}
+
 	// Remainder
 	z = NX-1;
 	for (; iN[z] < out_sz; ) {
@@ -1386,12 +1431,15 @@ unsigned char *rans_uncompress_O1_32x16_avx2(unsigned char *in, unsigned int in_
 	    out[iN[z]++] = c;
 	    R[z] = (S>>(TF_SHIFT_O1+8)) * (R[z]>>TF_SHIFT_O1) +
 		((S>>8) & ((1u<<TF_SHIFT_O1)-1));
-	    RansDecRenorm(&R[z], &ptr);
+	    RansDecRenormSafe(&R[z], &ptr, ptr_end+8);
 	    lN[z] = c;
 	}
     } else {
 	// TF_SHIFT_O1_FAST.  This is the most commonly used variant.
 
+	// SIMD version ends decoding early as it reads at most 64 bytes
+	// from input via 4 vectorised loads.
+	isz4 -= 64;
 	for (; iN[0] < isz4; ) {
 	    // m[z] = R[z] & mask;
 	    __m256i masked1 = _mm256_and_si256(Rv1, maskv);
@@ -1569,6 +1617,7 @@ unsigned char *rans_uncompress_O1_32x16_avx2(unsigned char *in, unsigned int in_
 	    Rv3 = _mm256_blendv_epi8(Rv3, Yv3, renorm_mask3);
 	    Rv4 = _mm256_blendv_epi8(Rv4, Yv4, renorm_mask4);
 	}
+	isz4 += 64;
 
 	STORE(Rv, R);
 	STORE(Lv, lN);
@@ -1582,6 +1631,21 @@ unsigned char *rans_uncompress_O1_32x16_avx2(unsigned char *in, unsigned int in_
 		    out[iN[z]++] = u.tbuf[T][z];
 	}
 
+	// Scalar version for close to the end of in[] array so we don't
+	// do SIMD loads beyond the end of the buffer
+	for (; iN[0] < isz4;) {
+	    for (z = 0; z < NX; z++) {
+		uint32_t m = R[z] & ((1u<<TF_SHIFT_O1_FAST)-1);
+		uint32_t S = s3F[lN[z]][m];
+		unsigned char c = S & 0xff;
+		out[iN[z]++] = c;
+		R[z] = (S>>(TF_SHIFT_O1_FAST+8)) * (R[z]>>TF_SHIFT_O1_FAST) +
+		    ((S>>8) & ((1u<<TF_SHIFT_O1_FAST)-1));
+		RansDecRenormSafe(&R[z], &ptr, ptr_end+8);
+		lN[z] = c;
+	    }
+	}
+
 	// Remainder
 	z = NX-1;
 	for (; iN[z] < out_sz; ) {
@@ -1591,14 +1655,20 @@ unsigned char *rans_uncompress_O1_32x16_avx2(unsigned char *in, unsigned int in_
 	    out[iN[z]++] = c;
 	    R[z] = (S>>(TF_SHIFT_O1_FAST+8)) * (R[z]>>TF_SHIFT_O1_FAST) +
 		((S>>8) & ((1u<<TF_SHIFT_O1_FAST)-1));
-	    RansDecRenorm(&R[z], &ptr);
+	    RansDecRenormSafe(&R[z], &ptr, ptr_end+8);
 	    lN[z] = c;
 	}
     }
 
+#ifdef NO_THREADS
+    free(s3);
+#endif
     return out;
 
  err:
+#ifdef NO_THREADS
+    free(s3);
+#endif
     free(out_free);
     free(c_freq);
 
