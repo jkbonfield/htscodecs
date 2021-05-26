@@ -796,35 +796,6 @@ unsigned char *rans_uncompress_O1_32x16(unsigned char *in, unsigned int in_size,
 	const uint32_t mask = ((1u << TF_SHIFT_O1_FAST)-1);
 	for (; i4[0] < isz4;) {
 	    for (z = 0; z < NX; z+=4) {
-#if 0
-		uint16_t m[4], c[4];
-		// We use this for TF_SHIFT_O1 as the lookup table on m is
-		// large, plus we have the wrap-around problem to fix up.
-		// But for 10-bit TF_SHIFT_O1_FAST we can merge sfb and
-		// fb into a single lookup table.  See below.
-
-		c[0] = sfb[l[z+0]][m[0] = R[z+0] & mask];
-		c[1] = sfb[l[z+1]][m[1] = R[z+1] & mask];
-		c[2] = sfb[l[z+2]][m[2] = R[z+2] & mask];
-		c[3] = sfb[l[z+3]][m[3] = R[z+3] & mask];
-
-		R[z+0] = fb[l[z+0]][c[0]].f * (R[z+0]>>TF_SHIFT_O1_FAST);
-		R[z+0] += m[0] - fb[l[z+0]][c[0]].b;
-
-		R[z+1] = fb[l[z+1]][c[1]].f * (R[z+1]>>TF_SHIFT_O1_FAST);
-		R[z+1] += m[1] - fb[l[z+1]][c[1]].b;
-
-		R[z+2] = fb[l[z+2]][c[2]].f * (R[z+2]>>TF_SHIFT_O1_FAST);
-		R[z+2] += m[2] - fb[l[z+2]][c[2]].b;
-
-		R[z+3] = fb[l[z+3]][c[3]].f * (R[z+3]>>TF_SHIFT_O1_FAST);
-		R[z+3] += m[3] - fb[l[z+3]][c[3]].b;
-
-		out[i4[z+0]++] = l[z+0] = c[0];
-		out[i4[z+1]++] = l[z+1] = c[1];
-		out[i4[z+2]++] = l[z+2] = c[2];
-		out[i4[z+3]++] = l[z+3] = c[3];
-#else
 		// Merged sfb and fb into single s3 lookup.
 		// The m[4] array completely vanishes in this method.
 		uint32_t S[4] = {
@@ -856,7 +827,6 @@ unsigned char *rans_uncompress_O1_32x16(unsigned char *in, unsigned int in_size,
 		R[z+1] = F[1] * (R[z+1]>>TF_SHIFT_O1_FAST) + B[1];
 		R[z+2] = F[2] * (R[z+2]>>TF_SHIFT_O1_FAST) + B[2];
 		R[z+3] = F[3] * (R[z+3]>>TF_SHIFT_O1_FAST) + B[3];
-#endif
 
 		if (ptr < ptr_end) {
 		    RansDecRenorm(&R[z+0], &ptr);
@@ -874,20 +844,11 @@ unsigned char *rans_uncompress_O1_32x16(unsigned char *in, unsigned int in_size,
 
 	// Remainder
 	for (; i4[NX-1] < out_sz; i4[NX-1]++) {
-#if 0
-	    uint32_t m = R[NX-1] & ((1u<<TF_SHIFT_O1_FAST)-1);
-	    unsigned char c = sfb[l[NX-1]][m];
-	    out[i4[NX-1]] = c;
-	    R[NX-1] = fb[l[NX-1]][c].f * (R[NX-1]>>TF_SHIFT_O1_FAST) + m - fb[l[NX-1]][c].b;
-	    RansDecRenormSafe(&R[NX-1], &ptr, ptr_end + 8);
-	    l[NX-1] = c;
-#else
 	    uint32_t S = s3[l[NX-1]][R[NX-1] & ((1u<<TF_SHIFT_O1_FAST)-1)];
 	    out[i4[NX-1]] = l[NX-1] = S&0xff;
 	    R[NX-1] = (S>>(TF_SHIFT_O1_FAST+8)) * (R[NX-1]>>TF_SHIFT_O1_FAST)
 		+ ((S>>8) & ((1u<<TF_SHIFT_O1_FAST)-1));
 	    RansDecRenormSafe(&R[NX-1], &ptr, ptr_end + 8);
-#endif
 	}
     }
     //fprintf(stderr, "    1 Decoded %d bytes\n", (int)(ptr-in)); //c-size
