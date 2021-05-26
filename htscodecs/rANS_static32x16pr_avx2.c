@@ -944,6 +944,172 @@ static void rans_tls_init(void) {
 }
 #endif
 
+static inline void transpose_and_copy(uint8_t *out, int iN[32],
+				      uint8_t t[32][32]) {
+    int z;
+//  for (z = 0; z < NX; z++) {
+//      int k;
+//      for (k = 0; k < 32; k++)
+//  	out[iN[z]+k] = t[k][z];
+//      iN[z] += 32;
+//  }
+
+    for (z = 0; z < NX; z+=4) {
+	*(uint64_t *)&out[iN[z]] =
+	    ((uint64_t)(t[0][z])<< 0) +
+	    ((uint64_t)(t[1][z])<< 8) +
+	    ((uint64_t)(t[2][z])<<16) +
+	    ((uint64_t)(t[3][z])<<24) +
+	    ((uint64_t)(t[4][z])<<32) +
+	    ((uint64_t)(t[5][z])<<40) +
+	    ((uint64_t)(t[6][z])<<48) +
+	    ((uint64_t)(t[7][z])<<56);
+	*(uint64_t *)&out[iN[z+1]] =
+	    ((uint64_t)(t[0][z+1])<< 0) +
+	    ((uint64_t)(t[1][z+1])<< 8) +
+	    ((uint64_t)(t[2][z+1])<<16) +
+	    ((uint64_t)(t[3][z+1])<<24) +
+	    ((uint64_t)(t[4][z+1])<<32) +
+	    ((uint64_t)(t[5][z+1])<<40) +
+	    ((uint64_t)(t[6][z+1])<<48) +
+	    ((uint64_t)(t[7][z+1])<<56);
+	*(uint64_t *)&out[iN[z+2]] =
+	    ((uint64_t)(t[0][z+2])<< 0) +
+	    ((uint64_t)(t[1][z+2])<< 8) +
+	    ((uint64_t)(t[2][z+2])<<16) +
+	    ((uint64_t)(t[3][z+2])<<24) +
+	    ((uint64_t)(t[4][z+2])<<32) +
+	    ((uint64_t)(t[5][z+2])<<40) +
+	    ((uint64_t)(t[6][z+2])<<48) +
+	    ((uint64_t)(t[7][z+2])<<56);
+	*(uint64_t *)&out[iN[z+3]] =
+	    ((uint64_t)(t[0][z+3])<< 0) +
+	    ((uint64_t)(t[1][z+3])<< 8) +
+	    ((uint64_t)(t[2][z+3])<<16) +
+	    ((uint64_t)(t[3][z+3])<<24) +
+	    ((uint64_t)(t[4][z+3])<<32) +
+	    ((uint64_t)(t[5][z+3])<<40) +
+	    ((uint64_t)(t[6][z+3])<<48) +
+	    ((uint64_t)(t[7][z+3])<<56);
+
+	*(uint64_t *)&out[iN[z]+8] =
+	    ((uint64_t)(t[8+0][z])<< 0) +
+	    ((uint64_t)(t[8+1][z])<< 8) +
+	    ((uint64_t)(t[8+2][z])<<16) +
+	    ((uint64_t)(t[8+3][z])<<24) +
+	    ((uint64_t)(t[8+4][z])<<32) +
+	    ((uint64_t)(t[8+5][z])<<40) +
+	    ((uint64_t)(t[8+6][z])<<48) +
+	    ((uint64_t)(t[8+7][z])<<56);
+	*(uint64_t *)&out[iN[z+1]+8] =
+	    ((uint64_t)(t[8+0][z+1])<< 0) +
+	    ((uint64_t)(t[8+1][z+1])<< 8) +
+	    ((uint64_t)(t[8+2][z+1])<<16) +
+	    ((uint64_t)(t[8+3][z+1])<<24) +
+	    ((uint64_t)(t[8+4][z+1])<<32) +
+	    ((uint64_t)(t[8+5][z+1])<<40) +
+	    ((uint64_t)(t[8+6][z+1])<<48) +
+	    ((uint64_t)(t[8+7][z+1])<<56);
+	*(uint64_t *)&out[iN[z+2]+8] =
+	    ((uint64_t)(t[8+0][z+2])<< 0) +
+	    ((uint64_t)(t[8+1][z+2])<< 8) +
+	    ((uint64_t)(t[8+2][z+2])<<16) +
+	    ((uint64_t)(t[8+3][z+2])<<24) +
+	    ((uint64_t)(t[8+4][z+2])<<32) +
+	    ((uint64_t)(t[8+5][z+2])<<40) +
+	    ((uint64_t)(t[8+6][z+2])<<48) +
+	    ((uint64_t)(t[8+7][z+2])<<56);
+	*(uint64_t *)&out[iN[z+3]+8] =
+	    ((uint64_t)(t[8+0][z+3])<< 0) +
+	    ((uint64_t)(t[8+1][z+3])<< 8) +
+	    ((uint64_t)(t[8+2][z+3])<<16) +
+	    ((uint64_t)(t[8+3][z+3])<<24) +
+	    ((uint64_t)(t[8+4][z+3])<<32) +
+	    ((uint64_t)(t[8+5][z+3])<<40) +
+	    ((uint64_t)(t[8+6][z+3])<<48) +
+	    ((uint64_t)(t[8+7][z+3])<<56);
+
+	*(uint64_t *)&out[iN[z]+16] =
+	    ((uint64_t)(t[16+0][z])<< 0) +
+	    ((uint64_t)(t[16+1][z])<< 8) +
+	    ((uint64_t)(t[16+2][z])<<16) +
+	    ((uint64_t)(t[16+3][z])<<24) +
+	    ((uint64_t)(t[16+4][z])<<32) +
+	    ((uint64_t)(t[16+5][z])<<40) +
+	    ((uint64_t)(t[16+6][z])<<48) +
+	    ((uint64_t)(t[16+7][z])<<56);
+	*(uint64_t *)&out[iN[z+1]+16] =
+	    ((uint64_t)(t[16+0][z+1])<< 0) +
+	    ((uint64_t)(t[16+1][z+1])<< 8) +
+	    ((uint64_t)(t[16+2][z+1])<<16) +
+	    ((uint64_t)(t[16+3][z+1])<<24) +
+	    ((uint64_t)(t[16+4][z+1])<<32) +
+	    ((uint64_t)(t[16+5][z+1])<<40) +
+	    ((uint64_t)(t[16+6][z+1])<<48) +
+	    ((uint64_t)(t[16+7][z+1])<<56);
+	*(uint64_t *)&out[iN[z+2]+16] =
+	    ((uint64_t)(t[16+0][z+2])<< 0) +
+	    ((uint64_t)(t[16+1][z+2])<< 8) +
+	    ((uint64_t)(t[16+2][z+2])<<16) +
+	    ((uint64_t)(t[16+3][z+2])<<24) +
+	    ((uint64_t)(t[16+4][z+2])<<32) +
+	    ((uint64_t)(t[16+5][z+2])<<40) +
+	    ((uint64_t)(t[16+6][z+2])<<48) +
+	    ((uint64_t)(t[16+7][z+2])<<56);
+	*(uint64_t *)&out[iN[z+3]+16] =
+	    ((uint64_t)(t[16+0][z+3])<< 0) +
+	    ((uint64_t)(t[16+1][z+3])<< 8) +
+	    ((uint64_t)(t[16+2][z+3])<<16) +
+	    ((uint64_t)(t[16+3][z+3])<<24) +
+	    ((uint64_t)(t[16+4][z+3])<<32) +
+	    ((uint64_t)(t[16+5][z+3])<<40) +
+	    ((uint64_t)(t[16+6][z+3])<<48) +
+	    ((uint64_t)(t[16+7][z+3])<<56);
+
+	*(uint64_t *)&out[iN[z]+24] =
+	    ((uint64_t)(t[24+0][z])<< 0) +
+	    ((uint64_t)(t[24+1][z])<< 8) +
+	    ((uint64_t)(t[24+2][z])<<16) +
+	    ((uint64_t)(t[24+3][z])<<24) +
+	    ((uint64_t)(t[24+4][z])<<32) +
+	    ((uint64_t)(t[24+5][z])<<40) +
+	    ((uint64_t)(t[24+6][z])<<48) +
+	    ((uint64_t)(t[24+7][z])<<56);
+	*(uint64_t *)&out[iN[z+1]+24] =
+	    ((uint64_t)(t[24+0][z+1])<< 0) +
+	    ((uint64_t)(t[24+1][z+1])<< 8) +
+	    ((uint64_t)(t[24+2][z+1])<<16) +
+	    ((uint64_t)(t[24+3][z+1])<<24) +
+	    ((uint64_t)(t[24+4][z+1])<<32) +
+	    ((uint64_t)(t[24+5][z+1])<<40) +
+	    ((uint64_t)(t[24+6][z+1])<<48) +
+	    ((uint64_t)(t[24+7][z+1])<<56);
+	*(uint64_t *)&out[iN[z+2]+24] =
+	    ((uint64_t)(t[24+0][z+2])<< 0) +
+	    ((uint64_t)(t[24+1][z+2])<< 8) +
+	    ((uint64_t)(t[24+2][z+2])<<16) +
+	    ((uint64_t)(t[24+3][z+2])<<24) +
+	    ((uint64_t)(t[24+4][z+2])<<32) +
+	    ((uint64_t)(t[24+5][z+2])<<40) +
+	    ((uint64_t)(t[24+6][z+2])<<48) +
+	    ((uint64_t)(t[24+7][z+2])<<56);
+	*(uint64_t *)&out[iN[z+3]+24] =
+	    ((uint64_t)(t[24+0][z+3])<< 0) +
+	    ((uint64_t)(t[24+1][z+3])<< 8) +
+	    ((uint64_t)(t[24+2][z+3])<<16) +
+	    ((uint64_t)(t[24+3][z+3])<<24) +
+	    ((uint64_t)(t[24+4][z+3])<<32) +
+	    ((uint64_t)(t[24+5][z+3])<<40) +
+	    ((uint64_t)(t[24+6][z+3])<<48) +
+	    ((uint64_t)(t[24+7][z+3])<<56);
+
+	iN[z+0] += 32;
+	iN[z+1] += 32;
+	iN[z+2] += 32;
+	iN[z+3] += 32;
+    }
+}
+
 unsigned char *rans_uncompress_O1_32x16_avx2(unsigned char *in, unsigned int in_size,
 					     unsigned char *out, unsigned int out_sz) {
     if (in_size < NX*4) // 4-states at least
@@ -1133,7 +1299,7 @@ unsigned char *rans_uncompress_O1_32x16_avx2(unsigned char *in, unsigned int in_
 	unsigned char tbuf[32][32];
 	uint64_t tbuf64[32][4];
     } u;
-    int tidx = 0;
+    unsigned int tidx = 0;
 
     if (shift == TF_SHIFT_O1) {
 #ifdef VALIDATE
@@ -1241,9 +1407,6 @@ unsigned char *rans_uncompress_O1_32x16_avx2(unsigned char *in, unsigned int in_
 	    Vv1 = _mm256_permutevar8x32_epi32(Vv1, idx1);
 	    sp += _mm_popcnt_u32(imask1);
 
-	    u.tbuf64[tidx][0] = _mm256_extract_epi64(sv1, 0);
-	    u.tbuf64[tidx][1] = _mm256_extract_epi64(sv1, 2);
-
 	    __m256i idx2 = _mm256_load_si256((const __m256i*)permute[imask2]);
 	    __m256i Vv2 = _mm256_cvtepu16_epi32(_mm_loadu_si128((__m128i *)sp));
 	    sp += _mm_popcnt_u32(imask2);
@@ -1300,6 +1463,8 @@ unsigned char *rans_uncompress_O1_32x16_avx2(unsigned char *in, unsigned int in_
 	    sv3 = _mm256_permute4x64_epi64(sv3, 0xd8);
 	    sv3 = _mm256_packus_epi16(sv3, sv3);
 
+	    u.tbuf64[tidx][0] = _mm256_extract_epi64(sv1, 0);
+	    u.tbuf64[tidx][1] = _mm256_extract_epi64(sv1, 2);
 	    u.tbuf64[tidx][2] = _mm256_extract_epi64(sv3, 0);
 	    u.tbuf64[tidx][3] = _mm256_extract_epi64(sv3, 2);
 
@@ -1307,31 +1472,7 @@ unsigned char *rans_uncompress_O1_32x16_avx2(unsigned char *in, unsigned int in_
 	    if (++tidx == 32) {
 		iN[0]-=32;
 
-		for (z = 0; z < NX; z++) {
-		    // replace by gathers?
-		    *(uint64_t *)&out[iN[z]] =
-			((uint64_t)(u.tbuf[0][z])<< 0) + ((uint64_t)(u.tbuf[1][z])<< 8) +
-			((uint64_t)(u.tbuf[2][z])<<16) + ((uint64_t)(u.tbuf[3][z])<<24) +
-			((uint64_t)(u.tbuf[4][z])<<32) + ((uint64_t)(u.tbuf[5][z])<<40) +
-			((uint64_t)(u.tbuf[6][z])<<48) + ((uint64_t)(u.tbuf[7][z])<<56);
-		    *(uint64_t *)&out[iN[z]+8] =
-			((uint64_t)(u.tbuf[8+0][z])<< 0) + ((uint64_t)(u.tbuf[8+1][z])<< 8) +
-			((uint64_t)(u.tbuf[8+2][z])<<16) + ((uint64_t)(u.tbuf[8+3][z])<<24) +
-			((uint64_t)(u.tbuf[8+4][z])<<32) + ((uint64_t)(u.tbuf[8+5][z])<<40) +
-			((uint64_t)(u.tbuf[8+6][z])<<48) + ((uint64_t)(u.tbuf[8+7][z])<<56);
-		    *(uint64_t *)&out[iN[z]+16] =
-			((uint64_t)(u.tbuf[16+0][z])<< 0) + ((uint64_t)(u.tbuf[16+1][z])<< 8) +
-			((uint64_t)(u.tbuf[16+2][z])<<16) + ((uint64_t)(u.tbuf[16+3][z])<<24) +
-			((uint64_t)(u.tbuf[16+4][z])<<32) + ((uint64_t)(u.tbuf[16+5][z])<<40) +
-			((uint64_t)(u.tbuf[16+6][z])<<48) + ((uint64_t)(u.tbuf[16+7][z])<<56);
-		    *(uint64_t *)&out[iN[z]+24] =
-			((uint64_t)(u.tbuf[24+0][z])<< 0) + ((uint64_t)(u.tbuf[24+1][z])<< 8) +
-			((uint64_t)(u.tbuf[24+2][z])<<16) + ((uint64_t)(u.tbuf[24+3][z])<<24) +
-			((uint64_t)(u.tbuf[24+4][z])<<32) + ((uint64_t)(u.tbuf[24+5][z])<<40) +
-			((uint64_t)(u.tbuf[24+6][z])<<48) + ((uint64_t)(u.tbuf[24+7][z])<<56);
-		    iN[z] += 32;
-		}
-
+		transpose_and_copy(out, iN, u.tbuf);
 		tidx = 0;
 	    }
 
@@ -1531,9 +1672,6 @@ unsigned char *rans_uncompress_O1_32x16_avx2(unsigned char *in, unsigned int in_
 	    Vv1 = _mm256_permutevar8x32_epi32(Vv1, idx1);
 	    sp += _mm_popcnt_u32(imask1);
 
-	    u.tbuf64[tidx][0] = _mm256_extract_epi64(sv1, 0);
-	    u.tbuf64[tidx][1] = _mm256_extract_epi64(sv1, 2);
-
 	    __m256i idx2 = _mm256_load_si256((const __m256i*)permute[imask2]);
 	    __m256i Vv2 = _mm256_cvtepu16_epi32(_mm_loadu_si128((__m128i *)sp));
 	    sp += _mm_popcnt_u32(imask2);
@@ -1576,41 +1714,44 @@ unsigned char *rans_uncompress_O1_32x16_avx2(unsigned char *in, unsigned int in_
 	    sp += _mm_popcnt_u32(imask3);
 	    Vv3 = _mm256_permutevar8x32_epi32(Vv3, idx3);
 
-	    sv3 = _mm256_packus_epi32(sv3, sv4);
-	    sv3 = _mm256_permute4x64_epi64(sv3, 0xd8);
-	    sv3 = _mm256_packus_epi16(sv3, sv3);
+	    // sv3 sv4 are 32-bit ints with lowest bit being char
+	    sv3 = _mm256_packus_epi32(sv3, sv4);       // 32 to 16; ABab
+	    sv3 = _mm256_permute4x64_epi64(sv3, 0xd8); // shuffle;  AaBb
+	    sv3 = _mm256_packus_epi16(sv3, sv3);       // 16 to 8
 
+	    // Method 1
+	    u.tbuf64[tidx][0] = _mm256_extract_epi64(sv1, 0);
+	    u.tbuf64[tidx][1] = _mm256_extract_epi64(sv1, 2);
 	    u.tbuf64[tidx][2] = _mm256_extract_epi64(sv3, 0);
 	    u.tbuf64[tidx][3] = _mm256_extract_epi64(sv3, 2);
+
+//	    // Method 2
+//	    sv1 = _mm256_permute4x64_epi64(sv1, 8); // x x 10 00
+//	    _mm_storeu_si128((__m128i *)&u.tbuf64[tidx][0],
+//			     _mm256_extractf128_si256(sv1, 0));
+//	    sv3 = _mm256_permute4x64_epi64(sv3, 8); // x x 10 00
+//	    _mm_storeu_si128((__m128i *)&u.tbuf64[tidx][2],
+//			     _mm256_extractf128_si256(sv3, 0));
+
+//          // Method 3
+//	    sv1 = _mm256_and_si256(sv1, _mm256_set_epi64x(0,-1,0,-1)); // AxBx
+//	    sv3 = _mm256_and_si256(sv3, _mm256_set_epi64x(-1,0,-1,0)); // xCxD
+//	    sv1 = _mm256_or_si256(sv1, sv3);                           // ACBD
+//	    sv1 = _mm256_permute4x64_epi64(sv1, 0xD8); //rev 00 10 01 11; ABCD
+//	    _mm256_storeu_si256((__m256i *)u.tbuf64[tidx], sv1);
 
 	    iN[0]++;
 	    if (++tidx == 32) {
 		iN[0]-=32;
 
-		for (z = 0; z < NX; z++) {
-		    // replace by gathers?
-		    *(uint64_t *)&out[iN[z]] =
-			((uint64_t)(u.tbuf[0][z])<< 0) + ((uint64_t)(u.tbuf[1][z])<< 8) +
-			((uint64_t)(u.tbuf[2][z])<<16) + ((uint64_t)(u.tbuf[3][z])<<24) +
-			((uint64_t)(u.tbuf[4][z])<<32) + ((uint64_t)(u.tbuf[5][z])<<40) +
-			((uint64_t)(u.tbuf[6][z])<<48) + ((uint64_t)(u.tbuf[7][z])<<56);
-		    *(uint64_t *)&out[iN[z]+8] =
-			((uint64_t)(u.tbuf[8+0][z])<< 0) + ((uint64_t)(u.tbuf[8+1][z])<< 8) +
-			((uint64_t)(u.tbuf[8+2][z])<<16) + ((uint64_t)(u.tbuf[8+3][z])<<24) +
-			((uint64_t)(u.tbuf[8+4][z])<<32) + ((uint64_t)(u.tbuf[8+5][z])<<40) +
-			((uint64_t)(u.tbuf[8+6][z])<<48) + ((uint64_t)(u.tbuf[8+7][z])<<56);
-		    *(uint64_t *)&out[iN[z]+16] =
-			((uint64_t)(u.tbuf[16+0][z])<< 0) + ((uint64_t)(u.tbuf[16+1][z])<< 8) +
-			((uint64_t)(u.tbuf[16+2][z])<<16) + ((uint64_t)(u.tbuf[16+3][z])<<24) +
-			((uint64_t)(u.tbuf[16+4][z])<<32) + ((uint64_t)(u.tbuf[16+5][z])<<40) +
-			((uint64_t)(u.tbuf[16+6][z])<<48) + ((uint64_t)(u.tbuf[16+7][z])<<56);
-		    *(uint64_t *)&out[iN[z]+24] =
-			((uint64_t)(u.tbuf[24+0][z])<< 0) + ((uint64_t)(u.tbuf[24+1][z])<< 8) +
-			((uint64_t)(u.tbuf[24+2][z])<<16) + ((uint64_t)(u.tbuf[24+3][z])<<24) +
-			((uint64_t)(u.tbuf[24+4][z])<<32) + ((uint64_t)(u.tbuf[24+5][z])<<40) +
-			((uint64_t)(u.tbuf[24+6][z])<<48) + ((uint64_t)(u.tbuf[24+7][z])<<56);
-		    iN[z] += 32;
-		}
+		// We have tidx[x][y] which we want to store in
+		// memory in out[y][z] instead.  This is an unrolled
+		// transposition.
+		//
+		// A straight memcpy (obviously wrong) decodes my test
+		// data in around 1030MB/s vs 930MB/s for this transpose,
+		// giving an idea of the time spent in this portion.
+		transpose_and_copy(out, iN, u.tbuf);
 
 		tidx = 0;
 	    }
