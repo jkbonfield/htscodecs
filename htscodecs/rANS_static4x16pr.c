@@ -929,13 +929,21 @@ unsigned char *rans_uncompress_O1_4x16(unsigned char *in, unsigned int in_size,
 #include "rANS_static32x16pr_avx2.h"
 #endif
 
+#ifdef HAVE_AVX512
+#include "rANS_static32x16pr_avx512.h"
+#endif
+
 #if defined(__GNUC__)
 #include <cpuid.h>
 
 static int force_sw32_enc = 0;
 static int force_sw32_dec = 0;
+static int disable_avx512 = 0;
 void force_sw32_decoder(void) {
     force_sw32_dec = 1;
+}
+void rans_disable_avx512(void) {
+    disable_avx512 = 1;
 }
 
 static inline
@@ -945,7 +953,31 @@ unsigned char *(*rans_enc_func(int do_simd, int order))
      unsigned char *out,
      unsigned int *out_size) {
 
-#if defined(bit_AVX2) && defined(HAVE_AVX2)
+#if defined(bit_AVX512F) && defined(HAVE_AVX512)
+    unsigned int eax = 0, ebx = 0, ecx = 0, edx = 0;
+
+    if (do_simd) {
+	int level = __get_cpuid_max(0, NULL);
+	if (level >= 7) {
+	    __cpuid_count(7, 0, eax, ebx, ecx, edx);
+	    if (force_sw32_enc)
+	        ebx &= ~(bit_AVX512F|bit_AVX2);
+	    if (disable_avx512)
+		ebx &= ~bit_AVX512F;
+	    if (order & 1) {
+		return ebx & bit_AVX2
+		    ? rans_compress_O1_32x16_avx2
+		    : rans_compress_O1_32x16;
+	    } else {
+		return ebx & bit_AVX512F
+		    ? rans_compress_O0_32x16_avx512
+		    : ( ebx & bit_AVX2
+			? rans_compress_O0_32x16_avx2
+			: rans_compress_O0_32x16);
+	    }
+	}
+    }
+#elif defined(bit_AVX2) && defined(HAVE_AVX2)
     unsigned int eax = 0, ebx = 0, ecx = 0, edx = 0;
 
     if (do_simd) {
@@ -985,7 +1017,31 @@ unsigned char *(*rans_dec_func(int do_simd, int order))
      unsigned int in_size,
      unsigned char *out,
      unsigned int out_size) {
-#if defined(bit_AVX2) && defined(HAVE_AVX2)
+#if defined(bit_AVX512F) && defined(HAVE_AVX512)
+    unsigned int eax = 0, ebx = 0, ecx = 0, edx = 0;
+
+    if (do_simd) {
+	int level = __get_cpuid_max(0, NULL);
+	if (level >= 7) {
+	    __cpuid_count(7, 0, eax, ebx, ecx, edx);
+	    if (force_sw32_dec)
+		ebx &= ~(bit_AVX512F|bit_AVX2);
+	    if (disable_avx512)
+		ebx &= ~bit_AVX512F;
+	    if (order & 1) {
+		return ebx & bit_AVX2
+		    ? rans_uncompress_O1_32x16_avx2
+		    : rans_uncompress_O1_32x16;
+	    } else {
+		return ebx & bit_AVX512F
+		    ? rans_uncompress_O0_32x16_avx512
+		    : ( ebx & bit_AVX2
+			? rans_uncompress_O0_32x16_avx2
+			: rans_uncompress_O0_32x16);
+	    }
+	}
+    }
+#elif defined(bit_AVX2) && defined(HAVE_AVX2)
     unsigned int eax = 0, ebx = 0, ecx = 0, edx = 0;
 
     if (do_simd) {
@@ -1088,6 +1144,8 @@ unsigned char *rans_compress_to_4x16(unsigned char *in,  unsigned int in_size,
 	force_sw32_enc = 1;
 	order &= ~(X_SW32_ENC|X_SW32_DEC);
     }
+    if (order & X_NO_AVX512)
+	disable_avx512 = 1;
 
     if (in_size <= 20)
 	order &= ~X_STRIPE;
