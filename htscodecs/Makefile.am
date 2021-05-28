@@ -48,6 +48,8 @@ libhtscodecs_la_SOURCES = \
 	rANS_static32x16pr.h \
 	rANS_static32x16pr_avx2.c \
 	rANS_static32x16pr_avx2.h \
+	rANS_static32x16pr_avx512.c \
+	rANS_static32x16pr_avx512.h \
 	permute.h \
 	tokenise_name3.c \
 	tokenise_name3.h \
@@ -68,6 +70,8 @@ libhtscodecs_la_LIBADD = @LIBZ@
 # AM_CFLAGS so users can override CFLAGS without breaking the build.
 rANS_static32x16pr_avx2.o:   AM_CFLAGS+=@MAVX2@
 rANS_static32x16pr_avx2.lo:  AM_CFLAGS+=@MAVX2@
+rANS_static32x16pr_avx512.o:   AM_CFLAGS+=@MAVX512@
+rANS_static32x16pr_avx512.lo:  AM_CFLAGS+=@MAVX512@
 
 version.h: force
 	@ if `git describe 2>/dev/null >/dev/null`; then \

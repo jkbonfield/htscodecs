@@ -55,7 +55,7 @@
 #define X_SIMD_AUTO 0x100 // automatically enable X_32 if we deem it worthy
 #define X_SW32_ENC  0x200 // forcibly use the software version of X_32
 #define X_SW32_DEC  0x400 // forcibly use the software version of X_32
-
+#define X_NO_AVX512 0x800 // turn off avx512, but permits AVX2
 
 #define TF_SHIFT 12
 #define TOTFREQ (1<<TF_SHIFT)

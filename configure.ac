@@ -111,6 +111,12 @@ AX_CHECK_COMPILE_FLAG([-mavx2], [
 	AC_SUBST(MAVX2)
         AC_DEFINE([HAVE_AVX2],1,[Defined to 1 if the compiler can issue AVX2 instructions.])])
 
+dnl Check also if we have AVX512.  If so this overrides AVX2
+AX_CHECK_COMPILE_FLAG([-mavx512f], [
+        MAVX512=-mavx512f
+	AC_SUBST(MAVX512)
+        AC_DEFINE([HAVE_AVX512],1,[Defined to 1 if the compiler can issue AVX512F instructions.])])
+
 AX_LIBDEFLATE
 
 dnl Checks for header files.
