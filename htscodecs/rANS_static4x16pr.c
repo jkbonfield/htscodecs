@@ -965,9 +965,11 @@ unsigned char *(*rans_enc_func(int do_simd, int order))
 	    if (disable_avx512)
 		ebx &= ~bit_AVX512F;
 	    if (order & 1) {
-		return ebx & bit_AVX2
-		    ? rans_compress_O1_32x16_avx2
-		    : rans_compress_O1_32x16;
+		return ebx & bit_AVX512F
+		    ? rans_compress_O1_32x16_avx512
+		    : (ebx & bit_AVX2
+		       ? rans_compress_O1_32x16_avx2
+		       : rans_compress_O1_32x16);
 	    } else {
 		return ebx & bit_AVX512F
 		    ? rans_compress_O0_32x16_avx512
@@ -1029,9 +1031,11 @@ unsigned char *(*rans_dec_func(int do_simd, int order))
 	    if (disable_avx512)
 		ebx &= ~bit_AVX512F;
 	    if (order & 1) {
-		return ebx & bit_AVX2
-		    ? rans_uncompress_O1_32x16_avx2
-		    : rans_uncompress_O1_32x16;
+		return ebx & bit_AVX512F
+		    ? rans_uncompress_O1_32x16_avx2 // 512 not working yet
+		    : (ebx & bit_AVX2
+		       ? rans_uncompress_O1_32x16_avx2
+		       : rans_uncompress_O1_32x16);
 	    } else {
 		return ebx & bit_AVX512F
 		    ? rans_uncompress_O0_32x16_avx512
