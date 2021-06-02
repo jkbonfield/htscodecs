@@ -52,6 +52,8 @@
 #include <math.h>
 #include <x86intrin.h>
 
+#include "permute.h"
+
 #ifndef NO_THREADS
 #include <pthread.h>
 #endif
@@ -376,10 +378,12 @@ static inline void transpose_and_copy(uint8_t *out, int iN[32],
 //  for (z = 0; z < 32; z++) {
 //      int k;
 //      for (k = 0; k < 32; k++)
-//  	out[iN[z]+k] = t[k][z];
+//  	    out[iN[z]+k] = t[k][z];
 //      iN[z] += 32;
 //  }
 
+    
+    // FIXME: use avx512 gather
     for (z = 0; z < 32; z+=4) {
 	*(uint64_t *)&out[iN[z]] =
 	    ((uint64_t)(t[0][z])<< 0) +
@@ -533,6 +537,30 @@ static inline void transpose_and_copy(uint8_t *out, int iN[32],
 	iN[z+1] += 32;
 	iN[z+2] += 32;
 	iN[z+3] += 32;
+    }
+}
+
+static inline void transpose_and_copy_avx512(uint8_t *out, int iN[32],
+					     uint32_t t32[32][32]) {
+    int z;
+//  for (z = 0; z < 32; z++) {
+//      int k;
+//      for (k = 0; k < 32; k++)
+//  	    out[iN[z]+k] = t32[k][z];
+//      iN[z] += 32;
+//  }
+
+    
+    __m512i v1 = _mm512_set_epi32(15, 14, 13, 12, 11, 10,  9,  8,
+				   7,  6,  5,  4,  3,  2,  1,  0);
+    v1 = _mm512_slli_epi32(v1, 5);
+    
+    for (z = 0; z < 32; z++) {
+	__m512i t1 = _mm512_i32gather_epi32(v1, &t32[ 0][z], 4);
+	__m512i t2 = _mm512_i32gather_epi32(v1, &t32[16][z], 4);
+	_mm_storeu_si128((__m128i*)(&out[iN[z]   ]), _mm512_cvtepi32_epi8(t1));
+	_mm_storeu_si128((__m128i*)(&out[iN[z]+16]), _mm512_cvtepi32_epi8(t2));
+	iN[z] += 32;
     }
 }
 
@@ -852,21 +880,16 @@ unsigned char *rans_compress_O1_32x16_avx512(unsigned char *in,
     return out;
 }
 
+#define NX 32
 unsigned char *rans_uncompress_O1_32x16_avx512(unsigned char *in,
 					       unsigned int in_size,
 					       unsigned char *out,
 					       unsigned int out_sz) {
-#if 0
-    if (in_size < 32*4) // 4-states at least
+    if (in_size < NX*4) // 4-states at least
 	return NULL;
 
     if (out_sz >= INT_MAX)
 	return NULL; // protect against some overflow cases
-
-#ifdef FUZZING_BUILD_MODE_UNSAFE_FOR_PRODUCTION
-    if (out_sz > 100000)
-	return NULL;
-#endif
 
     /* Load in the static tables */
     unsigned char *cp = in, *cp_end = in+in_size, *out_free = NULL;
@@ -890,7 +913,6 @@ unsigned char *rans_uncompress_O1_32x16_avx512(unsigned char *in,
     if (!s3)
 	return NULL;
 #endif
-    //uint32_t s3[256][TOTFREQ_O1] __attribute__((aligned(64)));
     uint32_t (*s3F)[TOTFREQ_O1_FAST] = (uint32_t (*)[TOTFREQ_O1_FAST])s3;
 
     if (!out)
@@ -983,97 +1005,465 @@ unsigned char *rans_uncompress_O1_32x16_avx512(unsigned char *in,
     if (cp+16 > cp_end)
 	goto err;
 
-    RansState R[32] __attribute__((aligned(64));
+    RansState R[NX] __attribute__((aligned(64)));
     uint8_t *ptr = cp, *ptr_end = in + in_size - 8;
     int z;
-    for (z = 0; z < 32; z++) {
+    for (z = 0; z < NX; z++) {
 	RansDecInit(&R[z], &ptr);
 	if (R[z] < RANS_BYTE_L)
 	    goto err;
     }
 
-    int isz4 = out_sz/32;
-    int iN[32], lN[32] __attribute__((aligned(64))) = {0};
-    for (z = 0; z < 32; z++)
+    int isz4 = out_sz/NX;
+    int iN[NX], lN[NX] __attribute__((aligned(64))) = {0};
+    for (z = 0; z < NX; z++)
 	iN[z] = z*isz4;
 
     uint16_t *sp = (uint16_t *)ptr;
     const uint32_t mask = (1u << shift)-1;
 
-    __m512i maskv  = _mm512_set1_epi32(mask);
-    LOAD512(Rv, R);
-    LOAD512(Lv, lN);
+    __m512i _maskv  = _mm512_set1_epi32(mask);
+    LOAD512(_Rv, R);
+    LOAD512(_Lv, lN);
 
     union {
 	unsigned char tbuf[32][32];
 	uint64_t tbuf64[32][4];
     } u;
+    uint32_t tbuf[32][32];
+
     unsigned int tidx = 0;
-    int offset=0;
 
     if (shift == TF_SHIFT_O1) {
-    } else {
+#if 1
+#define LOAD1(a,b) __m256i a##1 = _mm256_load_si256((__m256i *)&b[0]);
+#define LOAD2(a,b) __m256i a##2 = _mm256_load_si256((__m256i *)&b[8]);
+#define LOAD3(a,b) __m256i a##3 = _mm256_load_si256((__m256i *)&b[16]);
+#define LOAD4(a,b) __m256i a##4 = _mm256_load_si256((__m256i *)&b[24]);
+#define LOAD(a,b) LOAD1(a,b);LOAD2(a,b);LOAD3(a,b);LOAD4(a,b)
+
+#define STORE1(a,b) _mm256_store_si256((__m256i *)&b[0],  a##1);
+#define STORE2(a,b) _mm256_store_si256((__m256i *)&b[8],  a##2);
+#define STORE3(a,b) _mm256_store_si256((__m256i *)&b[16], a##3);
+#define STORE4(a,b) _mm256_store_si256((__m256i *)&b[24], a##4);
+#define STORE(a,b) STORE1(a,b);STORE2(a,b);STORE3(a,b);STORE4(a,b)
+
+	__m256i maskv  = _mm256_set1_epi32(mask);
+	LOAD(Rv, R);
+	LOAD(Lv, lN);
+#ifdef VALIDATE
+	const uint32_t mask = ((1u << TF_SHIFT_O1)-1);
+#endif
+	isz4 -= 64;
+	for (; iN[0] < isz4; ) {
+	    // m[z] = R[z] & mask;
+	    __m256i masked1 = _mm256_and_si256(Rv1, maskv);
+	    __m256i masked2 = _mm256_and_si256(Rv2, maskv);
+
+	    //  S[z] = s3[lN[z]][m[z]];
+	    Lv1 = _mm256_slli_epi32(Lv1, TF_SHIFT_O1);
+	    masked1 = _mm256_add_epi32(masked1, Lv1);
+
+	    Lv2 = _mm256_slli_epi32(Lv2, TF_SHIFT_O1);
+	    masked2 = _mm256_add_epi32(masked2, Lv2);
+
+	    __m256i masked3 = _mm256_and_si256(Rv3, maskv);
+	    __m256i masked4 = _mm256_and_si256(Rv4, maskv);
+
+	    Lv3 = _mm256_slli_epi32(Lv3, TF_SHIFT_O1);
+	    masked3 = _mm256_add_epi32(masked3, Lv3);
+
+	    Lv4 = _mm256_slli_epi32(Lv4, TF_SHIFT_O1);
+	    masked4 = _mm256_add_epi32(masked4, Lv4);
+
+	    __m256i Sv1 = _mm256_i32gather_epi32((int *)&s3[0][0], masked1, sizeof(s3[0][0]));
+	    __m256i Sv2 = _mm256_i32gather_epi32((int *)&s3[0][0], masked2, sizeof(s3[0][0]));
+
+	    //  f[z] = S[z]>>(TF_SHIFT_O1+8);
+	    __m256i fv1 = _mm256_srli_epi32(Sv1, TF_SHIFT_O1+8);
+	    __m256i fv2 = _mm256_srli_epi32(Sv2, TF_SHIFT_O1+8);
+
+	    __m256i Sv3 = _mm256_i32gather_epi32((int *)&s3[0][0], masked3, sizeof(s3[0][0]));
+	    __m256i Sv4 = _mm256_i32gather_epi32((int *)&s3[0][0], masked4, sizeof(s3[0][0]));
+
+	    __m256i fv3 = _mm256_srli_epi32(Sv3, TF_SHIFT_O1+8);
+	    __m256i fv4 = _mm256_srli_epi32(Sv4, TF_SHIFT_O1+8);
+
+	    //  b[z] = (S[z]>>8) & mask;
+	    __m256i bv1 = _mm256_and_si256(_mm256_srli_epi32(Sv1, 8), maskv);
+	    __m256i bv2 = _mm256_and_si256(_mm256_srli_epi32(Sv2, 8), maskv);
+	    __m256i bv3 = _mm256_and_si256(_mm256_srli_epi32(Sv3, 8), maskv);
+	    __m256i bv4 = _mm256_and_si256(_mm256_srli_epi32(Sv4, 8), maskv);
+
+	    //  s[z] = S[z] & 0xff;
+	    __m256i sv1 = _mm256_and_si256(Sv1, _mm256_set1_epi32(0xff));
+	    __m256i sv2 = _mm256_and_si256(Sv2, _mm256_set1_epi32(0xff));
+	    __m256i sv3 = _mm256_and_si256(Sv3, _mm256_set1_epi32(0xff));
+	    __m256i sv4 = _mm256_and_si256(Sv4, _mm256_set1_epi32(0xff));
+
+	    if (1) {
+		// A maximum frequency of 4096 doesn't fit in our s3 array.
+		// as it's 12 bit + 12 bit + 8 bit.  It wraps around to zero.
+		// (We don't have this issue for TOTFREQ_O1_FAST.)
+		//
+		// Solution 1 is to change to spec to forbid freq of 4096.
+		// Easy hack is to add an extra symbol so it sums correctly.
+		// => 572 MB/s on q40 (deskpro).
+		//
+		// Solution 2 implemented here is to look for the wrap around
+		// and fix it.
+		// => 556 MB/s on q40
+		// cope with max freq of 4096.  Only 3% hit
+		__m256i max_freq = _mm256_set1_epi32(TOTFREQ_O1);
+		__m256i zero = _mm256_setzero_si256();
+		__m256i cmp1 = _mm256_cmpeq_epi32(fv1, zero);
+		fv1 = _mm256_blendv_epi8(fv1, max_freq, cmp1);
+		__m256i cmp2 = _mm256_cmpeq_epi32(fv2, zero);
+		fv2 = _mm256_blendv_epi8(fv2, max_freq, cmp2);
+	    }
+
+	    //  R[z] = f[z] * (R[z] >> TF_SHIFT_O1) + b[z];
+	    Rv1 = _mm256_add_epi32(_mm256_mullo_epi32(_mm256_srli_epi32(Rv1,TF_SHIFT_O1),fv1),bv1);
+	    Rv2 = _mm256_add_epi32(_mm256_mullo_epi32(_mm256_srli_epi32(Rv2,TF_SHIFT_O1),fv2),bv2);
+
+
+	    //for (z = 0; z < NX; z++) lN[z] = c[z];
+	    Lv1 = sv1;
+	    Lv2 = sv2;
+
+	    sv1 = _mm256_packus_epi32(sv1, sv2);
+	    sv1 = _mm256_permute4x64_epi64(sv1, 0xd8);
+
+	    // Start loading next batch of normalised states
+	    __m256i Vv1 = _mm256_cvtepu16_epi32(_mm_loadu_si128((__m128i *)sp));
+
+	    sv1 = _mm256_packus_epi16(sv1, sv1);
+
+	    // out[iN[z]] = c[z];  // simulate scatter
+	    // RansDecRenorm(&R[z], &ptr);	
+	    __m256i renorm_mask1 = _mm256_xor_si256(Rv1, _mm256_set1_epi32(0x80000000));
+	    __m256i renorm_mask2 = _mm256_xor_si256(Rv2, _mm256_set1_epi32(0x80000000));
+
+	    renorm_mask1 = _mm256_cmpgt_epi32(_mm256_set1_epi32(RANS_BYTE_L-0x80000000), renorm_mask1);
+	    renorm_mask2 = _mm256_cmpgt_epi32(_mm256_set1_epi32(RANS_BYTE_L-0x80000000), renorm_mask2);
+
+	    unsigned int imask1 = _mm256_movemask_ps((__m256)renorm_mask1);
+	    __m256i idx1 = _mm256_load_si256((const __m256i*)permute[imask1]);
+	    __m256i Yv1 = _mm256_slli_epi32(Rv1, 16);
+	    __m256i Yv2 = _mm256_slli_epi32(Rv2, 16);
+
+	    unsigned int imask2 = _mm256_movemask_ps((__m256)renorm_mask2);
+	    Vv1 = _mm256_permutevar8x32_epi32(Vv1, idx1);
+	    sp += _mm_popcnt_u32(imask1);
+
+	    __m256i idx2 = _mm256_load_si256((const __m256i*)permute[imask2]);
+	    __m256i Vv2 = _mm256_cvtepu16_epi32(_mm_loadu_si128((__m128i *)sp));
+	    sp += _mm_popcnt_u32(imask2);
+	    Vv2 = _mm256_permutevar8x32_epi32(Vv2, idx2);
+
+	    //Vv = _mm256_and_si256(Vv, renorm_mask);  (blend does the AND anyway)
+	    Yv1 = _mm256_or_si256(Yv1, Vv1);
+	    Yv2 = _mm256_or_si256(Yv2, Vv2);
+
+	    Rv1 = _mm256_blendv_epi8(Rv1, Yv1, renorm_mask1);
+	    Rv2 = _mm256_blendv_epi8(Rv2, Yv2, renorm_mask2);
+
+	    /////////////////////////////////////////////////////////////////////
+
+	    // Start loading next batch of normalised states
+	    __m256i Vv3 = _mm256_cvtepu16_epi32(_mm_loadu_si128((__m128i *)sp));
+
+	    if (1) {
+		// cope with max freq of 4096
+		__m256i max_freq = _mm256_set1_epi32(TOTFREQ_O1);
+		__m256i zero = _mm256_setzero_si256();
+		__m256i cmp3 = _mm256_cmpeq_epi32(fv3, zero);
+		fv3 = _mm256_blendv_epi8(fv3, max_freq, cmp3);
+		__m256i cmp4 = _mm256_cmpeq_epi32(fv4, zero);
+		fv4 = _mm256_blendv_epi8(fv4, max_freq, cmp4);
+	    }
+
+	    //  R[z] = f[z] * (R[z] >> TF_SHIFT_O1) + b[z];
+	    Rv3 = _mm256_add_epi32(_mm256_mullo_epi32(_mm256_srli_epi32(Rv3,TF_SHIFT_O1),fv3),bv3);
+	    Rv4 = _mm256_add_epi32(_mm256_mullo_epi32(_mm256_srli_epi32(Rv4,TF_SHIFT_O1),fv4),bv4);
+
+	    //for (z = 0; z < NX; z++) lN[z] = c[z];
+	    Lv3 = sv3;
+	    Lv4 = sv4;
+
+	    // out[iN[z]] = c[z];  // simulate scatter
+	    // RansDecRenorm(&R[z], &ptr);	
+	    __m256i renorm_mask3 = _mm256_xor_si256(Rv3, _mm256_set1_epi32(0x80000000));
+	    __m256i renorm_mask4 = _mm256_xor_si256(Rv4, _mm256_set1_epi32(0x80000000));
+
+	    renorm_mask3 = _mm256_cmpgt_epi32(_mm256_set1_epi32(RANS_BYTE_L-0x80000000), renorm_mask3);
+	    renorm_mask4 = _mm256_cmpgt_epi32(_mm256_set1_epi32(RANS_BYTE_L-0x80000000), renorm_mask4);
+
+	    __m256i Yv3 = _mm256_slli_epi32(Rv3, 16);
+	    __m256i Yv4 = _mm256_slli_epi32(Rv4, 16);
+
+	    unsigned int imask3 = _mm256_movemask_ps((__m256)renorm_mask3);
+	    unsigned int imask4 = _mm256_movemask_ps((__m256)renorm_mask4);
+	    __m256i idx3 = _mm256_load_si256((const __m256i*)permute[imask3]);
+	    sp += _mm_popcnt_u32(imask3);
+	    Vv3 = _mm256_permutevar8x32_epi32(Vv3, idx3);
+
+	    sv3 = _mm256_packus_epi32(sv3, sv4);
+	    sv3 = _mm256_permute4x64_epi64(sv3, 0xd8);
+	    sv3 = _mm256_packus_epi16(sv3, sv3);
+
+	    u.tbuf64[tidx][0] = _mm256_extract_epi64(sv1, 0);
+	    u.tbuf64[tidx][1] = _mm256_extract_epi64(sv1, 2);
+	    u.tbuf64[tidx][2] = _mm256_extract_epi64(sv3, 0);
+	    u.tbuf64[tidx][3] = _mm256_extract_epi64(sv3, 2);
+
+	    iN[0]++;
+	    if (++tidx == 32) {
+		iN[0]-=32;
+
+		transpose_and_copy(out, iN, u.tbuf);
+		tidx = 0;
+	    }
+
+	    __m256i idx4 = _mm256_load_si256((const __m256i*)permute[imask4]);
+	    __m256i Vv4 = _mm256_cvtepu16_epi32(_mm_loadu_si128((__m128i *)sp));
+
+	    //Vv = _mm256_and_si256(Vv, renorm_mask);  (blend does the AND anyway)
+	    Yv3 = _mm256_or_si256(Yv3, Vv3);
+	    Vv4 = _mm256_permutevar8x32_epi32(Vv4, idx4);
+	    Yv4 = _mm256_or_si256(Yv4, Vv4);
+
+	    sp += _mm_popcnt_u32(imask4);
+
+	    Rv3 = _mm256_blendv_epi8(Rv3, Yv3, renorm_mask3);
+	    Rv4 = _mm256_blendv_epi8(Rv4, Yv4, renorm_mask4);
+
+#ifdef VALIDATE
+	    STORE(Rv, R);
+	    for (z = 0; z < NX; z+=4) {
+		uint16_t m[4], c[4];
+		c[0] = sfb[l[z+0]][m[0] = R_[z+0] & mask];
+		c[1] = sfb[l[z+1]][m[1] = R_[z+1] & mask];
+		c[2] = sfb[l[z+2]][m[2] = R_[z+2] & mask];
+		c[3] = sfb[l[z+3]][m[3] = R_[z+3] & mask];
+		
+		R_[z+0] = fb[l[z+0]][c[0]].f * (R_[z+0]>>TF_SHIFT_O1);
+		R_[z+0] += m[0] - fb[l[z+0]][c[0]].b;
+
+		R_[z+1] = fb[l[z+1]][c[1]].f * (R_[z+1]>>TF_SHIFT_O1);
+		R_[z+1] += m[1] - fb[l[z+1]][c[1]].b;
+
+		R_[z+2] = fb[l[z+2]][c[2]].f * (R_[z+2]>>TF_SHIFT_O1);
+		R_[z+2] += m[2] - fb[l[z+2]][c[2]].b;
+
+		R_[z+3] = fb[l[z+3]][c[3]].f * (R_[z+3]>>TF_SHIFT_O1);
+		R_[z+3] += m[3] - fb[l[z+3]][c[3]].b;
+
+                i4[z+0]++; l[z+0] = c[0];
+                i4[z+1]++; l[z+1] = c[1];
+                i4[z+2]++; l[z+2] = c[2];
+                i4[z+3]++; l[z+3] = c[3];
+
+		//if (c[0] != out[iN[z+0]-1]) abort();
+		//if (c[1] != out[iN[z+1]-1]) abort();
+		//if (c[2] != out[iN[z+2]-1]) abort();
+		//if (c[3] != out[iN[z+3]-1]) abort();
+
+		if (ptr < ptr_end) {
+		    RansDecRenorm(&R_[z+0], &ptr);
+		    RansDecRenorm(&R_[z+1], &ptr);
+		    RansDecRenorm(&R_[z+2], &ptr);
+		    RansDecRenorm(&R_[z+3], &ptr);
+		} else {
+		    RansDecRenormSafe(&R_[z+0], &ptr, ptr_end+8);
+		    RansDecRenormSafe(&R_[z+1], &ptr, ptr_end+8);
+		    RansDecRenormSafe(&R_[z+2], &ptr, ptr_end+8);
+		    RansDecRenormSafe(&R_[z+3], &ptr, ptr_end+8);
+		}
+	    }
+
+	    for (z = 0; z < NX; z++) {
+		if (R[z] != R_[z]) {
+		    fprintf(stderr, "iN[0] %d, z=%d\n", iN[0], z);
+		    abort();
+		}
+	    }
+	    // assert hits at loop 13503 with z==1.
+	    // sp == ptr+2;  so we've moved on another item.
+#endif
+	}
+	isz4 += 64;
+
+	STORE(Rv, R);
+	STORE(Lv, lN);
+	ptr = (uint8_t *)sp;
+
+	if (1) {
+	    iN[0]-=tidx;
+	    int T;
+	    for (z = 0; z < NX; z++)
+		for (T = 0; T < tidx; T++)
+		    out[iN[z]++] = u.tbuf[T][z];
+	}
+
+	// Scalar version for close to the end of in[] array so we don't
+	// do SIMD loads beyond the end of the buffer
+	for (; iN[0] < isz4;) {
+	    for (z = 0; z < NX; z++) {
+		uint32_t m = R[z] & ((1u<<TF_SHIFT_O1)-1);
+		uint32_t S = s3[lN[z]][m];
+		unsigned char c = S & 0xff;
+		out[iN[z]++] = c;
+		uint32_t F = S>>(TF_SHIFT_O1+8);
+		R[z] = (F?F:4096) * (R[z]>>TF_SHIFT_O1) +
+		    ((S>>8) & ((1u<<TF_SHIFT_O1)-1));
+		RansDecRenormSafe(&R[z], &ptr, ptr_end+8);
+		lN[z] = c;
+	    }
+	}
+
+	// Remainder
+	z = NX-1;
+	for (; iN[z] < out_sz; ) {
+	    uint32_t m = R[z] & ((1u<<TF_SHIFT_O1)-1);
+	    uint32_t S = s3[lN[z]][m];
+	    unsigned char c = S & 0xff;
+	    out[iN[z]++] = c;
+	    uint32_t F = S>>(TF_SHIFT_O1+8);
+	    R[z] = (F?F:4096) * (R[z]>>TF_SHIFT_O1) +
+		((S>>8) & ((1u<<TF_SHIFT_O1)-1));
+	    RansDecRenormSafe(&R[z], &ptr, ptr_end+8);
+	    lN[z] = c;
+	}
+#else
+	isz4 -= 64;
+
 	// TF_SHIFT_O1_FAST.  This is the most commonly used variant.
 
 	// SIMD version ends decoding early as it reads at most 64 bytes
 	// from input via 4 vectorised loads.
 	isz4 -= 64;
 	for (; iN[0] < isz4; ) {
-	    __m512i renorm_words1 = _mm512_cvtepu16_epi32(_mm256_loadu_si256((const __m256i *) (sp+offset))); // next 16 words
-
 	    // m[z] = R[z] & mask;
-	    __m512i masked1 = _mm512_and_si512(Rv1, maskv);
-	    __m512i masked2 = _mm512_and_si512(Rv2, maskv);
+	    __m512i _masked1 = _mm512_and_si512(_Rv1, _maskv);
+	    __m512i _masked2 = _mm512_and_si512(_Rv2, _maskv);
 
 	    //  S[z] = s3[lN[z]][m[z]];
-	    Lv1 = _mm512_slli_epi32(Lv1, TF_SHIFT_O1_FAST);
-	    masked1 = _mm512_add_epi32(masked1, Lv1);
+	    _Lv1 = _mm512_slli_epi32(_Lv1, TF_SHIFT_O1);
+	    _Lv2 = _mm512_slli_epi32(_Lv2, TF_SHIFT_O1);
 
-	    Lv2 = _mm512_slli_epi32(Lv2, TF_SHIFT_O1_FAST);
-	    masked2 = _mm512_add_epi32(masked2, Lv2);
+	    _masked1 = _mm512_add_epi32(_masked1, _Lv1);
+	    _masked2 = _mm512_add_epi32(_masked2, _Lv2);
 
-	    __m512i Sv1 = _mm512_i32gather_epi32(masked1, (int *)&s3F[0][0],
-						 sizeof(s3F[0][0]));
-	    __m512i Sv2 = _mm512_i32gather_epi32(masked2, (int *)&s3F[0][0],
-						 sizeof(s3F[0][0]));
+	    __m512i _Sv1 = _mm512_i32gather_epi32(_masked1, (int *)&s3F[0][0], sizeof(s3F[0][0]));
+	    __m512i _Sv2 = _mm512_i32gather_epi32(_masked2, (int *)&s3F[0][0], sizeof(s3F[0][0]));
 
 	    //  f[z] = S[z]>>(TF_SHIFT_O1+8);
-	    __m512i fv1 = _mm512_srli_epi32(Sv1, TF_SHIFT_O1_FAST+8);
-	    __m512i fv2 = _mm512_srli_epi32(Sv2, TF_SHIFT_O1_FAST+8);
+	    __m512i _fv1 = _mm512_srli_epi32(_Sv1, TF_SHIFT_O1+8);
+	    __m512i _fv2 = _mm512_srli_epi32(_Sv2, TF_SHIFT_O1+8);
+
+	    if (1) {
+		// A maximum frequency of 4096 doesn't fit in our s3 array.
+		// as it's 12 bit + 12 bit + 8 bit.  It wraps around to zero.
+		// (We don't have this issue for TOTFREQ_O1_FAST.)
+		//
+		// Solution 1 is to change to spec to forbid freq of 4096.
+		// Easy hack is to add an extra symbol so it sums correctly.
+		// => 572 MB/s on q40 (deskpro).
+		//
+		// Solution 2 implemented here is to look for the wrap around
+		// and fix it.
+		// => 556 MB/s on q40
+		// cope with max freq of 4096.  Only 3% hit
+		__m256i max_freq = _mm256_set1_epi32(TOTFREQ_O1);
+		__m256i zero = _mm256_setzero_si256();
+		uint32_t tmp[32];
+		_mm512_storeu_si512(&tmp[ 0], _fv1);
+		_mm512_storeu_si512(&tmp[16], _fv2);
+		__m256i fv1 = _mm256_load_si256(&tmp[ 0]);
+		__m256i fv2 = _mm256_load_si256(&tmp[ 8]);
+		__m256i fv3 = _mm256_load_si256(&tmp[16]);
+		__m256i fv4 = _mm256_load_si256(&tmp[24]);
+
+		__m256i cmp1 = _mm256_cmpeq_epi32(fv1, zero);
+		__m256i cmp2 = _mm256_cmpeq_epi32(fv2, zero);
+		__m256i cmp3 = _mm256_cmpeq_epi32(fv3, zero);
+		__m256i cmp4 = _mm256_cmpeq_epi32(fv4, zero);
+		fv1 = _mm256_blendv_epi8(fv1, max_freq, cmp1);
+		fv2 = _mm256_blendv_epi8(fv2, max_freq, cmp2);
+		fv3 = _mm256_blendv_epi8(fv3, max_freq, cmp3);
+		fv4 = _mm256_blendv_epi8(fv4, max_freq, cmp4);
+	    }
+
+	    if (0) {
+		// A maximum frequency of 4096 doesn't fit in our s3 array.
+		// as it's 12 bit + 12 bit + 8 bit.  It wraps around to zero.
+		// (We don't have this issue for TOTFREQ_O1_FAST.)
+		//
+		// Solution 1 is to change to spec to forbid freq of 4096.
+		// Easy hack is to add an extra symbol so it sums correctly.
+		// => 572 MB/s on q40 (deskpro).
+		//
+		// Solution 2 implemented here is to look for the wrap around
+		// and fix it.
+		// => 556 MB/s on q40
+		// cope with max freq of 4096.  Only 3% hit
+		__m512i max_freq = _mm512_set1_epi32(TOTFREQ_O1);
+		__m512i zero = _mm512_setzero_si512();
+		__mmask16 cmp1 = _mm512_cmpeq_epi32_mask(_fv1, zero);
+		__mmask16 cmp2 = _mm512_cmpeq_epi32_mask(_fv2, zero);
+		_fv1 = _mm512_mask_blend_epi32(cmp1, _fv1, max_freq);
+		_fv2 = _mm512_mask_blend_epi32(cmp2, _fv2, max_freq);
+	    }
 
 	    //  b[z] = (S[z]>>8) & mask;
-	    __m512i bv1 = _mm512_and_si512(_mm512_srli_epi32(Sv1, 8), maskv);
-	    __m512i bv2 = _mm512_and_si512(_mm512_srli_epi32(Sv2, 8), maskv);
+	    __m512i _bv1 = _mm512_and_si512(_mm512_srli_epi32(_Sv1, 8), _maskv);
+	    __m512i _bv2 = _mm512_and_si512(_mm512_srli_epi32(_Sv2, 8), _maskv);
+
 	    //  s[z] = S[z] & 0xff;
-	    __m512i sv1 = _mm512_and_si512(Sv1, _mm512_set1_epi32(0xff));
-	    __m512i sv2 = _mm512_and_si512(Sv2, _mm512_set1_epi32(0xff));
+	    __m512i _sv1 = _mm512_and_si512(_Sv1, _mm512_set1_epi32(0xff));
+	    __m512i _sv2 = _mm512_and_si512(_Sv2, _mm512_set1_epi32(0xff));
 
 	    //  R[z] = f[z] * (R[z] >> TF_SHIFT_O1) + b[z];
-	    Rv1 = _mm512_add_epi32(_mm512_mullo_epi32(_mm512_srli_epi32(Rv1,TF_SHIFT_O1_FAST),fv1),bv1);
-	    Rv2 = _mm512_add_epi32(_mm512_mullo_epi32(_mm512_srli_epi32(Rv2,TF_SHIFT_O1_FAST),fv2),bv2);
+	    _Rv1 = _mm512_add_epi32(_mm512_mullo_epi32(_mm512_srli_epi32(_Rv1,TF_SHIFT_O1),_fv1),_bv1);
+	    _Rv2 = _mm512_add_epi32(_mm512_mullo_epi32(_mm512_srli_epi32(_Rv2,TF_SHIFT_O1),_fv2),_bv2);
 
-	    //for (z = 0; z < 32; z++) lN[z] = c[z];
-	    Lv1 = sv1;
-	    Lv2 = sv2;
+	    //for (z = 0; z < NX; z++) lN[z] = c[z];
+	    _Lv1 = _sv1;
+	    _Lv2 = _sv2;
 
-	    // Renorm
-	    __mmask16 renorm_mask1 = _mm512_cmplt_epu32_mask(Rv1, _mm512_set1_epi32(RANS_BYTE_L));
-	    __mmask16 renorm_mask2 = _mm512_cmplt_epu32_mask(Rv2, _mm512_set1_epi32(RANS_BYTE_L));
-	    offset += _mm_popcnt_u32(renorm_mask1); // advance by however many words we actually read
-	    __m512i renorm_words2 = _mm512_cvtepu16_epi32(_mm256_loadu_si256((const __m256i *) (sp+offset)));
+	    // RansDecRenorm(&R[z], &ptr);
+	    __m512i _renorm_mask1 = _mm512_xor_si512(_Rv1, _mm512_set1_epi32(0x80000000));
+	    __m512i _renorm_mask2 = _mm512_xor_si512(_Rv2, _mm512_set1_epi32(0x80000000));
 
-	    __m512i renorm_vals1 = _mm512_maskz_expand_epi32(renorm_mask1, renorm_words1); // select masked only
-	    __m512i renorm_vals2 = _mm512_maskz_expand_epi32(renorm_mask2, renorm_words2); // select masked only
-	    Rv1 = _mm512_mask_slli_epi32(Rv1, renorm_mask1, Rv1, 16); // shift & add selected words
-	    Rv2 = _mm512_mask_slli_epi32(Rv2, renorm_mask2, Rv2, 16); // shift & add selected words
-	    Rv1 = _mm512_add_epi32(Rv1, renorm_vals1);
-	    Rv2 = _mm512_add_epi32(Rv2, renorm_vals2);
+	    int _imask1 =_mm512_cmpgt_epi32_mask
+	        (_mm512_set1_epi32(RANS_BYTE_L-0x80000000), _renorm_mask1);
+	    int _imask2 = _mm512_cmpgt_epi32_mask
+		(_mm512_set1_epi32(RANS_BYTE_L-0x80000000), _renorm_mask2);
 
-	    // Method 1
-	    _mm_storeu_si128((__m128i *)(u.tbuf64[tidx]+0),
-			     _mm512_cvtepi32_epi8(sv1));
-	    _mm_storeu_si128((__m128i *)(u.tbuf64[tidx]+2),
-			     _mm512_cvtepi32_epi8(sv2));
+	    __m512i renorm_words1 = _mm512_cvtepu16_epi32
+		(_mm256_loadu_si256((const __m256i *)sp));
+	    sp += _mm_popcnt_u32(_imask1);
+
+	    __m512i renorm_words2 = _mm512_cvtepu16_epi32
+		(_mm256_loadu_si256((const __m256i *)sp));
+	    sp += _mm_popcnt_u32(_imask2);
+
+	    __m512i _renorm_vals1 =
+		_mm512_maskz_expand_epi32(_imask1, renorm_words1);
+	    __m512i _renorm_vals2 =
+		_mm512_maskz_expand_epi32(_imask2, renorm_words2);
+
+	    _Rv1 = _mm512_mask_slli_epi32(_Rv1, _imask1, _Rv1, 16);
+	    _Rv2 = _mm512_mask_slli_epi32(_Rv2, _imask2, _Rv2, 16);
+
+	    _Rv1 = _mm512_add_epi32(_Rv1, _renorm_vals1);
+	    _Rv2 = _mm512_add_epi32(_Rv2, _renorm_vals2);
+
+	    _mm_storeu_si128((__m128i *)(&u.tbuf64[tidx][0]),
+			     _mm512_cvtepi32_epi8(_Sv1)); // or _sv1?
+	    _mm_storeu_si128((__m128i *)(&u.tbuf64[tidx][2]),
+			     _mm512_cvtepi32_epi8(_Sv2));
 
 	    iN[0]++;
 	    if (++tidx == 32) {
@@ -1093,14 +1483,14 @@ unsigned char *rans_uncompress_O1_32x16_avx512(unsigned char *in,
 	}
 	isz4 += 64;
 
-	STORE512(Rv, R);
-	STORE512(Lv, lN);
+	STORE512(_Rv, R);
+	STORE512(_Lv, lN);
 	ptr = (uint8_t *)sp;
 
 	if (1) {
 	    iN[0]-=tidx;
 	    int T;
-	    for (z = 0; z < 32; z++)
+	    for (z = 0; z < NX; z++)
 		for (T = 0; T < tidx; T++)
 		    out[iN[z]++] = u.tbuf[T][z];
 	}
@@ -1108,7 +1498,147 @@ unsigned char *rans_uncompress_O1_32x16_avx512(unsigned char *in,
 	// Scalar version for close to the end of in[] array so we don't
 	// do SIMD loads beyond the end of the buffer
 	for (; iN[0] < isz4;) {
-	    for (z = 0; z < 32; z++) {
+	    for (z = 0; z < NX; z++) {
+		uint32_t m = R[z] & ((1u<<TF_SHIFT_O1)-1);
+		uint32_t S = s3[lN[z]][m];
+		unsigned char c = S & 0xff;
+		out[iN[z]++] = c;
+		uint32_t F = S>>(TF_SHIFT_O1+8);
+		R[z] = (F?F:4096) * (R[z]>>TF_SHIFT_O1) +
+		    ((S>>8) & ((1u<<TF_SHIFT_O1)-1));
+		RansDecRenormSafe(&R[z], &ptr, ptr_end+8);
+		lN[z] = c;
+	    }
+	}
+
+	// Remainder
+	z = NX-1;
+	for (; iN[z] < out_sz; ) {
+	    uint32_t m = R[z] & ((1u<<TF_SHIFT_O1)-1);
+	    uint32_t S = s3[lN[z]][m];
+	    unsigned char c = S & 0xff;
+	    out[iN[z]++] = c;
+	    uint32_t F = S>>(TF_SHIFT_O1+8);
+	    R[z] = (F?F:4096) * (R[z]>>TF_SHIFT_O1) +
+		((S>>8) & ((1u<<TF_SHIFT_O1)-1));
+	    RansDecRenormSafe(&R[z], &ptr, ptr_end+8);
+	    lN[z] = c;
+	}
+#endif
+    } else {
+	// TF_SHIFT_O1_FAST.  This is the most commonly used variant.
+
+	// SIMD version ends decoding early as it reads at most 64 bytes
+	// from input via 4 vectorised loads.
+	isz4 -= 64;
+	for (; iN[0] < isz4; ) {
+	    // m[z] = R[z] & mask;
+	    __m512i _masked1 = _mm512_and_si512(_Rv1, _maskv);
+	    __m512i _masked2 = _mm512_and_si512(_Rv2, _maskv);
+
+	    //  S[z] = s3[lN[z]][m[z]];
+	    _Lv1 = _mm512_slli_epi32(_Lv1, TF_SHIFT_O1_FAST);
+	    _Lv2 = _mm512_slli_epi32(_Lv2, TF_SHIFT_O1_FAST);
+
+	    _masked1 = _mm512_add_epi32(_masked1, _Lv1);
+	    _masked2 = _mm512_add_epi32(_masked2, _Lv2);
+
+	    // This is the biggest bottleneck
+	    __m512i _Sv1 = _mm512_i32gather_epi32(_masked1, (int *)&s3F[0][0], sizeof(s3F[0][0]));
+	    __m512i _Sv2 = _mm512_i32gather_epi32(_masked2, (int *)&s3F[0][0], sizeof(s3F[0][0]));
+
+	    //  f[z] = S[z]>>(TF_SHIFT_O1+8);
+	    __m512i _fv1 = _mm512_srli_epi32(_Sv1, TF_SHIFT_O1_FAST+8);
+	    __m512i _fv2 = _mm512_srli_epi32(_Sv2, TF_SHIFT_O1_FAST+8);
+
+	    //  b[z] = (S[z]>>8) & mask;
+	    __m512i _bv1 = _mm512_and_si512(_mm512_srli_epi32(_Sv1, 8), _maskv);
+	    __m512i _bv2 = _mm512_and_si512(_mm512_srli_epi32(_Sv2, 8), _maskv);
+
+	    //  s[z] = S[z] & 0xff;
+	    __m512i _sv1 = _mm512_and_si512(_Sv1, _mm512_set1_epi32(0xff));
+	    __m512i _sv2 = _mm512_and_si512(_Sv2, _mm512_set1_epi32(0xff));
+
+	    //  R[z] = f[z] * (R[z] >> TF_SHIFT_O1) + b[z];
+	    _Rv1 = _mm512_add_epi32(_mm512_mullo_epi32(_mm512_srli_epi32(_Rv1,TF_SHIFT_O1_FAST),_fv1),_bv1);
+	    _Rv2 = _mm512_add_epi32(_mm512_mullo_epi32(_mm512_srli_epi32(_Rv2,TF_SHIFT_O1_FAST),_fv2),_bv2);
+
+	    //for (z = 0; z < NX; z++) lN[z] = c[z];
+	    _Lv1 = _sv1;
+	    _Lv2 = _sv2;
+
+	    // RansDecRenorm(&R[z], &ptr);
+	    __m512i _renorm_mask1 = _mm512_xor_si512(_Rv1, _mm512_set1_epi32(0x80000000));
+	    __m512i _renorm_mask2 = _mm512_xor_si512(_Rv2, _mm512_set1_epi32(0x80000000));
+
+	    int _imask1 =_mm512_cmpgt_epi32_mask
+	        (_mm512_set1_epi32(RANS_BYTE_L-0x80000000), _renorm_mask1);
+	    int _imask2 = _mm512_cmpgt_epi32_mask
+		(_mm512_set1_epi32(RANS_BYTE_L-0x80000000), _renorm_mask2);
+
+	    __m512i renorm_words1 = _mm512_cvtepu16_epi32
+		(_mm256_loadu_si256((const __m256i *)sp));
+	    sp += _mm_popcnt_u32(_imask1);
+
+	    __m512i renorm_words2 = _mm512_cvtepu16_epi32
+		(_mm256_loadu_si256((const __m256i *)sp));
+	    sp += _mm_popcnt_u32(_imask2);
+
+	    __m512i _renorm_vals1 =
+		_mm512_maskz_expand_epi32(_imask1, renorm_words1);
+	    __m512i _renorm_vals2 =
+		_mm512_maskz_expand_epi32(_imask2, renorm_words2);
+
+	    _Rv1 = _mm512_mask_slli_epi32(_Rv1, _imask1, _Rv1, 16);
+	    _Rv2 = _mm512_mask_slli_epi32(_Rv2, _imask2, _Rv2, 16);
+
+	    _Rv1 = _mm512_add_epi32(_Rv1, _renorm_vals1);
+	    _Rv2 = _mm512_add_epi32(_Rv2, _renorm_vals2);
+
+//#define TBUF8
+#ifdef TBUF8
+	    _mm_storeu_si128((__m128i *)(&u.tbuf64[tidx][0]),
+			     _mm512_cvtepi32_epi8(_Sv1)); // or _sv1?
+	    _mm_storeu_si128((__m128i *)(&u.tbuf64[tidx][2]),
+			     _mm512_cvtepi32_epi8(_Sv2));
+#else
+	    _mm512_storeu_si512((__m512i *)(&tbuf[tidx][ 0]), _sv1);
+	    _mm512_storeu_si512((__m512i *)(&tbuf[tidx][16]), _sv2);
+#endif
+
+	    iN[0]++;
+	    if (++tidx == 32) {
+		iN[0]-=32;
+#ifdef TBUF8
+		transpose_and_copy(out, iN, u.tbuf);
+#else
+		transpose_and_copy_avx512(out, iN, tbuf);
+#endif
+		tidx = 0;
+	    }
+	}
+	isz4 += 64;
+
+	STORE512(_Rv, R);
+	STORE512(_Lv, lN);
+	ptr = (uint8_t *)sp;
+
+	if (1) {
+	    iN[0]-=tidx;
+	    int T;
+	    for (z = 0; z < NX; z++)
+		for (T = 0; T < tidx; T++)
+#ifdef TBUF8
+		    out[iN[z]++] = u.tbuf[T][z];
+#else
+		    out[iN[z]++] = tbuf[T][z];
+#endif
+	}
+
+	// Scalar version for close to the end of in[] array so we don't
+	// do SIMD loads beyond the end of the buffer
+	for (; iN[0] < isz4;) {
+	    for (z = 0; z < NX; z++) {
 		uint32_t m = R[z] & ((1u<<TF_SHIFT_O1_FAST)-1);
 		uint32_t S = s3F[lN[z]][m];
 		unsigned char c = S & 0xff;
@@ -1121,7 +1651,7 @@ unsigned char *rans_uncompress_O1_32x16_avx512(unsigned char *in,
 	}
 
 	// Remainder
-	z = 32-1;
+	z = NX-1;
 	for (; iN[z] < out_sz; ) {
 	    uint32_t m = R[z] & ((1u<<TF_SHIFT_O1_FAST)-1);
 	    uint32_t S = s3F[lN[z]][m];
@@ -1145,7 +1675,6 @@ unsigned char *rans_uncompress_O1_32x16_avx512(unsigned char *in,
 #endif
     free(out_free);
     free(c_freq);
-#endif
 
     return NULL;
 }
