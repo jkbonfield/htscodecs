@@ -47,6 +47,16 @@ unsigned char *rans_uncompress_O0_32x16_avx512(unsigned char *in,
 					       unsigned int in_size,
 					       unsigned char *out,
 					       unsigned int out_sz);
+
+unsigned char *rans_compress_O1_32x16_avx512(unsigned char *in,
+					     unsigned int in_size,
+					     unsigned char *out,
+					     unsigned int *out_size);
+
+unsigned char *rans_uncompress_O1_32x16_avx512(unsigned char *in,
+					       unsigned int in_size,
+					       unsigned char *out,
+					       unsigned int out_sz);
 #ifdef __cplusplus
 }
 #endif
