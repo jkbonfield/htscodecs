@@ -750,7 +750,7 @@ unsigned char *rans_uncompress_O1_32x16(unsigned char *in, unsigned int in_size,
 		c[1] = sfb[l[z+1]][m[1] = R[z+1] & mask];
 		c[2] = sfb[l[z+2]][m[2] = R[z+2] & mask];
 		c[3] = sfb[l[z+3]][m[3] = R[z+3] & mask];
-		
+
 		R[z+0] = fb[l[z+0]][c[0]].f * (R[z+0]>>TF_SHIFT_O1);
 		R[z+0] += m[0] - fb[l[z+0]][c[0]].b;
 
