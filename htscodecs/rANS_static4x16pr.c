@@ -1032,7 +1032,7 @@ unsigned char *(*rans_dec_func(int do_simd, int order))
 		ebx &= ~bit_AVX512F;
 	    if (order & 1) {
 		return ebx & bit_AVX512F
-		    ? rans_uncompress_O1_32x16_avx2 // 512 not working yet
+		    ? rans_uncompress_O1_32x16_avx512
 		    : (ebx & bit_AVX2
 		       ? rans_uncompress_O1_32x16_avx2
 		       : rans_uncompress_O1_32x16);
