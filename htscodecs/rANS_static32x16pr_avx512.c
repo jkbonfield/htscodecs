@@ -52,8 +52,6 @@
 #include <math.h>
 #include <x86intrin.h>
 
-#include "permute.h"
-
 #ifndef NO_THREADS
 #include <pthread.h>
 #endif
@@ -1041,34 +1039,6 @@ unsigned char *rans_uncompress_O1_32x16_avx512(unsigned char *in,
     unsigned int tidx = 0;
 
     if (shift == TF_SHIFT_O1) {
-//#define LOAD1(a,b) __m256i a##1 = _mm256_load_si256((__m256i *)&b[0]);
-//#define LOAD2(a,b) __m256i a##2 = _mm256_load_si256((__m256i *)&b[8]);
-//#define LOAD3(a,b) __m256i a##3 = _mm256_load_si256((__m256i *)&b[16]);
-//#define LOAD4(a,b) __m256i a##4 = _mm256_load_si256((__m256i *)&b[24]);
-//#define LOAD(a,b) LOAD1(a,b);LOAD2(a,b);LOAD3(a,b);LOAD4(a,b)
-//
-//#define STORE1(a,b) _mm256_store_si256((__m256i *)&b[0],  a##1);
-//#define STORE2(a,b) _mm256_store_si256((__m256i *)&b[8],  a##2);
-//#define STORE3(a,b) _mm256_store_si256((__m256i *)&b[16], a##3);
-//#define STORE4(a,b) _mm256_store_si256((__m256i *)&b[24], a##4);
-//#define STORE(a,b) STORE1(a,b);STORE2(a,b);STORE3(a,b);STORE4(a,b)
-//
-//#define LOAD1b(a,b) a##1 = _mm256_load_si256((__m256i *)&b[0]);
-//#define LOAD2b(a,b) a##2 = _mm256_load_si256((__m256i *)&b[8]);
-//#define LOAD3b(a,b) a##3 = _mm256_load_si256((__m256i *)&b[16]);
-//#define LOAD4b(a,b) a##4 = _mm256_load_si256((__m256i *)&b[24]);
-//#define LOADb(a,b) LOAD1b(a,b);LOAD2b(a,b);LOAD3b(a,b);LOAD4b(a,b)
-//
-//#define LOAD512b(a,b)                                     \
-//    a##1 = _mm512_load_si512((__m512i *)&b[0]); \
-//    a##2 = _mm512_load_si512((__m512i *)&b[16]);
-//
-//	uint32_t tmp[32] __attribute__((aligned(64)));
-//#define COPY256(a) STORE(a,tmp); LOAD512b(_##a,tmp);
-//#define COPY512(a) STORE512(_##a,tmp); LOADb(a,tmp);
-//
-//	LOAD(Rv, R);
-//	LOAD(Lv, lN);
 	isz4 -= 64;
 	for (; iN[0] < isz4; ) {
 	    // m[z] = R[z] & mask;
@@ -1098,26 +1068,24 @@ unsigned char *rans_uncompress_O1_32x16_avx512(unsigned char *in,
 	    __m512i _sv1 = _mm512_and_si512(_Sv1, _mm512_set1_epi32(0xff));
 	    __m512i _sv2 = _mm512_and_si512(_Sv2, _mm512_set1_epi32(0xff));
 
-	    if (1) {
-		// A maximum frequency of 4096 doesn't fit in our s3 array.
-		// as it's 12 bit + 12 bit + 8 bit.  It wraps around to zero.
-		// (We don't have this issue for TOTFREQ_O1_FAST.)
-		//
-		// Solution 1 is to change to spec to forbid freq of 4096.
-		// Easy hack is to add an extra symbol so it sums correctly.
-		// => 572 MB/s on q40 (deskpro).
-		//
-		// Solution 2 implemented here is to look for the wrap around
-		// and fix it.
-		// => 556 MB/s on q40
-		// cope with max freq of 4096.  Only 3% hit
-		__m512i max_freq = _mm512_set1_epi32(TOTFREQ_O1);
-		__m512i zero = _mm512_setzero_si512();
-		__mmask16 cmp1 = _mm512_cmpeq_epi32_mask(_fv1, zero);
-		__mmask16 cmp2 = _mm512_cmpeq_epi32_mask(_fv2, zero);
-		_fv1 = _mm512_mask_blend_epi32(cmp1, _fv1, max_freq);
-		_fv2 = _mm512_mask_blend_epi32(cmp2, _fv2, max_freq);
-	    }
+	    // A maximum frequency of 4096 doesn't fit in our s3 array.
+	    // as it's 12 bit + 12 bit + 8 bit.  It wraps around to zero.
+	    // (We don't have this issue for TOTFREQ_O1_FAST.)
+	    //
+	    // Solution 1 is to change to spec to forbid freq of 4096.
+	    // Easy hack is to add an extra symbol so it sums correctly.
+	    // => 572 MB/s on q40 (deskpro).
+	    //
+	    // Solution 2 implemented here is to look for the wrap around
+	    // and fix it.
+	    // => 556 MB/s on q40
+	    // cope with max freq of 4096.  Only 3% hit
+	    __m512i max_freq = _mm512_set1_epi32(TOTFREQ_O1);
+	    __m512i zero = _mm512_setzero_si512();
+	    __mmask16 cmp1 = _mm512_cmpeq_epi32_mask(_fv1, zero);
+	    __mmask16 cmp2 = _mm512_cmpeq_epi32_mask(_fv2, zero);
+	    _fv1 = _mm512_mask_blend_epi32(cmp1, _fv1, max_freq);
+	    _fv2 = _mm512_mask_blend_epi32(cmp2, _fv2, max_freq);
 
 	    //  R[z] = f[z] * (R[z] >> TF_SHIFT_O1) + b[z];
 	    _Rv1 = _mm512_add_epi32(_mm512_mullo_epi32(_mm512_srli_epi32(_Rv1,TF_SHIFT_O1),_fv1),_bv1);
