@@ -933,9 +933,6 @@ unsigned char *rans_uncompress_O1_4x16(unsigned char *in, unsigned int in_size,
 #include "rANS_static32x16pr_avx512.h"
 #endif
 
-#if defined(__GNUC__)
-#include <cpuid.h>
-
 static int force_sw32_enc = 0;
 static int force_sw32_dec = 0;
 static int disable_avx512 = 0;
@@ -945,6 +942,10 @@ void force_sw32_decoder(void) {
 void rans_disable_avx512(void) {
     disable_avx512 = 1;
 }
+
+#if defined(__GNUC__) && defined(__x86_64__)
+// Icc and Clang both also set __GNUC__
+#include <cpuid.h>
 
 static inline
 unsigned char *(*rans_enc_func(int do_simd, int order))
@@ -1077,14 +1078,19 @@ unsigned char *(*rans_dec_func(int do_simd, int order))
 	? rans_uncompress_O1_4x16
 	: rans_uncompress_O0_4x16;
 }
-#else
+
+#else // defined(__GNUC__) && defined(__x86_64__)
 
 // We may well be able to write generate AVX2 code, but if we can't auto-detect
 // it then it's pointless.  We can however still use the 32-way codec as
 // we may be decoding on a machine with AVX2 support and the CPU hit isn't
 // vast.
 #ifdef HAVE_AVX2
-#undef HAVE_AVX2
+#  undef HAVE_AVX2
+#endif
+
+#ifdef HAVE_AVX2
+#  undef HAVE_AVX512
 #endif
 static inline
 unsigned char *(*rans_enc_func(int do_simd, int order))
@@ -1110,9 +1116,16 @@ unsigned char *(*rans_dec_func(int do_simd, int order))
      unsigned int in_size,
      unsigned char *out,
      unsigned int out_size) {
-    return order & 1
-	? rans_uncompress_O1_32x16
-	: rans_uncompress_O0_32x16;
+
+    if (do_simd) {
+	return order & 1
+	    ? rans_uncompress_O1_32x16
+	    : rans_uncompress_O0_32x16;
+    } else {
+	return order & 1
+	    ? rans_uncompress_O1_4x16
+	    : rans_uncompress_O0_4x16;
+    }
 }
 
 #endif

@@ -78,8 +78,6 @@ extern pthread_key_t rans_key;
 extern void rans_tls_init(void);
 #endif
 
-#include <x86intrin.h>
-
 #define NX 32
 
 // Hist8 with a crude entropy (bits / byte) estimator.
