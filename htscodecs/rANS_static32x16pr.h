@@ -38,6 +38,7 @@
 extern "C" {
 #endif
 
+// Standard scalar versions
 unsigned char *rans_compress_O0_32x16(unsigned char *in, unsigned int in_size,
 				      unsigned char *out, unsigned int *out_size);
 
@@ -49,6 +50,21 @@ unsigned char *rans_compress_O1_32x16(unsigned char *in, unsigned int in_size,
 
 unsigned char *rans_uncompress_O1_32x16(unsigned char *in, unsigned int in_size,
 					unsigned char *out, unsigned int out_sz);
+
+#ifdef __ARM_NEON
+// ARM Neon optimised versions
+unsigned char *rans_compress_O0_32x16_neon(unsigned char *in, unsigned int in_size,
+				      unsigned char *out, unsigned int *out_size);
+
+unsigned char *rans_uncompress_O0_32x16_neon(unsigned char *in, unsigned int in_size,
+					unsigned char *out, unsigned int out_sz);
+
+unsigned char *rans_compress_O1_32x16_neon(unsigned char *in, unsigned int in_size,
+				      unsigned char *out, unsigned int *out_size);
+
+unsigned char *rans_uncompress_O1_32x16_neon(unsigned char *in, unsigned int in_size,
+					unsigned char *out, unsigned int out_sz);
+#endif // ARM_NEON
 
 #ifdef __cplusplus
 }
