@@ -123,6 +123,10 @@ double hist8e(unsigned char *in, unsigned int in_size, uint32_t F0[256]) {
     return e/in_size;
 }
 
+#ifdef __ARM_NEON
+#  include "rANS_static32x16pr_neon.c"
+#endif
+
 unsigned char *rans_compress_O0_32x16(unsigned char *in, unsigned int in_size,
 				      unsigned char *out, unsigned int *out_size) {
     unsigned char *cp, *out_end;

@@ -1079,6 +1079,53 @@ unsigned char *(*rans_dec_func(int do_simd, int order))
 	: rans_uncompress_O0_4x16;
 }
 
+#elif defined(__ARM_NEON)
+static inline
+unsigned char *(*rans_enc_func(int do_simd, int order))
+    (unsigned char *in,
+     unsigned int in_size,
+     unsigned char *out,
+     unsigned int *out_size) {
+
+    if (do_simd) {
+	if (force_sw32_enc)
+	    return order & 1
+		? rans_compress_O1_32x16
+		: rans_compress_O0_32x16;
+	else
+	    return order & 1
+		? rans_compress_O1_32x16_neon
+		: rans_compress_O0_32x16_neon;
+    } else {
+	return order & 1
+	    ? rans_compress_O1_4x16
+	    : rans_compress_O0_4x16;
+    }
+}
+
+static inline
+unsigned char *(*rans_dec_func(int do_simd, int order))
+    (unsigned char *in,
+     unsigned int in_size,
+     unsigned char *out,
+     unsigned int out_size) {
+
+    if (do_simd) {
+	if (force_sw32_enc)
+	    return order & 1
+		? rans_uncompress_O1_32x16
+		: rans_uncompress_O0_32x16;
+	else
+	    return order & 1
+		? rans_uncompress_O1_32x16_neon
+		: rans_uncompress_O0_32x16_neon;
+    } else {
+	return order & 1
+	    ? rans_uncompress_O1_4x16
+	    : rans_uncompress_O0_4x16;
+    }
+}
+
 #else // defined(__GNUC__) && defined(__x86_64__)
 
 // We may well be able to write generate AVX2 code, but if we can't auto-detect

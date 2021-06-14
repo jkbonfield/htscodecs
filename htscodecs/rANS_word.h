@@ -437,19 +437,26 @@ static inline void RansDecRenorm(RansState* r, uint8_t** pptr) {
 
 static inline void RansDecRenorm(RansState* r, uint8_t** pptr)
 {
-    // renormalize
+    // renormalize, branchless
     uint32_t x = *r;
-
-    // Up to 6% quicker (rans4x16pr -t) if using unaligned access,
-    // but normally closer.
-    uint32_t y = (*pptr)[0] | ((*pptr)[1]<<8);
-
-    if (x < RANS_BYTE_L)
-	(*pptr)+=2;
-    if (x < RANS_BYTE_L)
-	x = (x << 16) | y;
-
+    int cmp = (x < RANS_BYTE_L);
+    uint32_t y = (*pptr)[0] + ((*pptr)[1]<<8);
+    x = cmp ? (x << 16) | y : x;
+    (*pptr) += 2*cmp;
     *r = x;
+
+//    // renormalize, branched.  Faster on low-complexity data, but generally
+//    // that is best compressed with PACK and/or RLE which turns it back
+//    // into high complexity data.
+//    uint32_t x = *r;
+//    uint32_t y = (*pptr)[0] | ((*pptr)[1]<<8);
+//
+//    if (x < RANS_BYTE_L)
+//	(*pptr)+=2;
+//    if (x < RANS_BYTE_L)
+//	x = (x << 16) | y;
+//
+//    *r = x;
 }
 #endif /* __x86_64 */
 
