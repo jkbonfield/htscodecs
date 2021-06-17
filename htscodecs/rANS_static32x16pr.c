@@ -127,8 +127,10 @@ double hist8e(unsigned char *in, unsigned int in_size, uint32_t F0[256]) {
 #  include "rANS_static32x16pr_neon.c"
 #endif
 
-unsigned char *rans_compress_O0_32x16(unsigned char *in, unsigned int in_size,
-				      unsigned char *out, unsigned int *out_size) {
+unsigned char *rans_compress_O0_32x16(unsigned char *in,
+				      unsigned int in_size,
+				      unsigned char *out,
+				      unsigned int *out_size) {
     unsigned char *cp, *out_end;
     RansEncSymbol syms[256];
     RansState ransN[NX];
@@ -260,8 +262,10 @@ unsigned char *rans_compress_O0_32x16(unsigned char *in, unsigned int in_size,
     return out;
 }
 
-unsigned char *rans_uncompress_O0_32x16(unsigned char *in, unsigned int in_size,
-					unsigned char *out, unsigned int out_sz) {
+unsigned char *rans_uncompress_O0_32x16(unsigned char *in,
+					unsigned int in_size,
+					unsigned char *out,
+					unsigned int out_sz) {
     if (in_size < 16) // 4-states at least
 	return NULL;
 
@@ -335,10 +339,14 @@ unsigned char *rans_uncompress_O0_32x16(unsigned char *in, unsigned int in_size,
 	    S[2] = s3[R[z+2] & mask];
 	    S[3] = s3[R[z+3] & mask];
 
-	    R[z+0] = (S[0]>>(TF_SHIFT+8)) * (R[z+0] >> TF_SHIFT) + ((S[0]>>8) & mask);
-	    R[z+1] = (S[1]>>(TF_SHIFT+8)) * (R[z+1] >> TF_SHIFT) + ((S[1]>>8) & mask);
-	    R[z+2] = (S[2]>>(TF_SHIFT+8)) * (R[z+2] >> TF_SHIFT) + ((S[2]>>8) & mask);
-	    R[z+3] = (S[3]>>(TF_SHIFT+8)) * (R[z+3] >> TF_SHIFT) + ((S[3]>>8) & mask);
+	    R[z+0] = (S[0]>>(TF_SHIFT+8)) * (R[z+0] >> TF_SHIFT)
+		+ ((S[0]>>8) & mask);
+	    R[z+1] = (S[1]>>(TF_SHIFT+8)) * (R[z+1] >> TF_SHIFT)
+		+ ((S[1]>>8) & mask);
+	    R[z+2] = (S[2]>>(TF_SHIFT+8)) * (R[z+2] >> TF_SHIFT)
+		+ ((S[2]>>8) & mask);
+	    R[z+3] = (S[3]>>(TF_SHIFT+8)) * (R[z+3] >> TF_SHIFT)
+		+ ((S[3]>>8) & mask);
 
 	    out[i+z+0] = S[0];
 	    out[i+z+1] = S[1];
@@ -357,10 +365,14 @@ unsigned char *rans_uncompress_O0_32x16(unsigned char *in, unsigned int in_size,
 		S[2] = s3[R[z+2] & mask];
 		S[3] = s3[R[z+3] & mask];
 
-		R[z+0] = (S[0]>>(TF_SHIFT+8)) * (R[z+0] >> TF_SHIFT) + ((S[0]>>8) & mask);
-		R[z+1] = (S[1]>>(TF_SHIFT+8)) * (R[z+1] >> TF_SHIFT) + ((S[1]>>8) & mask);
-		R[z+2] = (S[2]>>(TF_SHIFT+8)) * (R[z+2] >> TF_SHIFT) + ((S[2]>>8) & mask);
-		R[z+3] = (S[3]>>(TF_SHIFT+8)) * (R[z+3] >> TF_SHIFT) + ((S[3]>>8) & mask);
+		R[z+0] = (S[0]>>(TF_SHIFT+8)) * (R[z+0] >> TF_SHIFT)
+		    + ((S[0]>>8) & mask);
+		R[z+1] = (S[1]>>(TF_SHIFT+8)) * (R[z+1] >> TF_SHIFT)
+		    + ((S[1]>>8) & mask);
+		R[z+2] = (S[2]>>(TF_SHIFT+8)) * (R[z+2] >> TF_SHIFT)
+		    + ((S[2]>>8) & mask);
+		R[z+3] = (S[3]>>(TF_SHIFT+8)) * (R[z+3] >> TF_SHIFT)
+		    + ((S[3]>>8) & mask);
 
 		out[i+z+0] = S[0];
 		out[i+z+1] = S[1];
@@ -389,9 +401,10 @@ unsigned char *rans_uncompress_O0_32x16(unsigned char *in, unsigned int in_size,
 
 
 //-----------------------------------------------------------------------------
-
-unsigned char *rans_compress_O1_32x16(unsigned char *in, unsigned int in_size,
-				      unsigned char *out, unsigned int *out_size) {
+unsigned char *rans_compress_O1_32x16(unsigned char *in,
+				      unsigned int in_size,
+				      unsigned char *out,
+				      unsigned int *out_size) {
     unsigned char *cp, *out_end, *op;
     unsigned int tab_size;
     RansEncSymbol syms[256][256];
@@ -424,8 +437,10 @@ unsigned char *rans_compress_O1_32x16(unsigned char *in, unsigned int in_size,
 	F[0][in[z*isz4]]++;
     T[0]+=NX-1;
 
-    // FIXME: Fix to prevent max freq.
-    // Why not just cap at TOTFREQ_O1-1 instead?
+    // Max freq causes an issue for the 12-bit decoder as we use a 12-bit
+    // slot in the uint32_t so 4096 wraps to 0.  We cope with this case
+    // during decode, but we could instead just change the spec to require
+    // 4095 as the largest freq.  This disabled code achieves this.
     uint32_t F0[256+MAGIC] = {0};
     if (0) {
 	// skew stats to never get max freq of 4096.
@@ -501,7 +516,8 @@ unsigned char *rans_compress_O1_32x16(unsigned char *in, unsigned int in_size,
 	// try rans0 compression of header
 	unsigned int u_freq_sz = cp-(op+1);
 	unsigned int c_freq_sz;
-	unsigned char *c_freq = rans_compress_O0_4x16(op+1, u_freq_sz, NULL, &c_freq_sz);
+	unsigned char *c_freq = rans_compress_O0_4x16(op+1, u_freq_sz, NULL,
+						      &c_freq_sz);
 	if (c_freq && c_freq_sz + 6 < cp-op) {
 	    *op++ |= 1; // compressed
 	    op += var_put_u32(op, NULL, u_freq_sz);
@@ -545,10 +561,14 @@ unsigned char *rans_compress_O1_32x16(unsigned char *in, unsigned int in_size,
 	    unsigned char c2;
 	    unsigned char c3;
 
-	    RansEncSymbol *s0 = &syms[c0 = in[iN[z-0]--]][lN[z-0]]; lN[z-0] = c0;
-	    RansEncSymbol *s1 = &syms[c1 = in[iN[z-1]--]][lN[z-1]]; lN[z-1] = c1;
-	    RansEncSymbol *s2 = &syms[c2 = in[iN[z-2]--]][lN[z-2]]; lN[z-2] = c2;
-	    RansEncSymbol *s3 = &syms[c3 = in[iN[z-3]--]][lN[z-3]]; lN[z-3] = c3;
+	    RansEncSymbol *s0 = &syms[c0 = in[iN[z-0]--]][lN[z-0]];
+	    lN[z-0] = c0;
+	    RansEncSymbol *s1 = &syms[c1 = in[iN[z-1]--]][lN[z-1]];
+	    lN[z-1] = c1;
+	    RansEncSymbol *s2 = &syms[c2 = in[iN[z-2]--]][lN[z-2]];
+	    lN[z-2] = c2;
+	    RansEncSymbol *s3 = &syms[c3 = in[iN[z-3]--]][lN[z-3]];
+	    lN[z-3] = c3;
 
 	    RansEncPutSymbol(&ransN[z-0], &ptr, s0);
 	    RansEncPutSymbol(&ransN[z-1], &ptr, s1);
@@ -579,8 +599,10 @@ typedef struct {
     uint16_t b;
 } fb_t;
 
-unsigned char *rans_uncompress_O1_32x16(unsigned char *in, unsigned int in_size,
-					unsigned char *out, unsigned int out_sz) {
+unsigned char *rans_uncompress_O1_32x16(unsigned char *in,
+					unsigned int in_size,
+					unsigned char *out,
+					unsigned int out_sz) {
     if (in_size < NX*4) // 4-states at least
 	return NULL;
 
@@ -661,7 +683,7 @@ unsigned char *rans_uncompress_O1_32x16(unsigned char *in, unsigned int in_size,
 	if (c_freq_sz >= cp_end - cp - 16)
 	    goto err;
 	tab_end = cp + c_freq_sz;
-	if (!(c_freq = rans_uncompress_O0_4x16(cp, c_freq_sz, NULL, u_freq_sz)))
+	if (!(c_freq = rans_uncompress_O0_4x16(cp, c_freq_sz, NULL,u_freq_sz)))
 	    goto err;
 	cp = c_freq;
 	c_freq_end = c_freq + u_freq_sz;
@@ -789,7 +811,8 @@ unsigned char *rans_uncompress_O1_32x16(unsigned char *in, unsigned int in_size,
 	    uint32_t m = R[NX-1] & ((1u<<TF_SHIFT_O1)-1);
 	    unsigned char c = sfb[l[NX-1]][m];
 	    out[i4[NX-1]] = c;
-	    R[NX-1] = fb[l[NX-1]][c].f * (R[NX-1]>>TF_SHIFT_O1) + m - fb[l[NX-1]][c].b;
+	    R[NX-1] = fb[l[NX-1]][c].f * (R[NX-1]>>TF_SHIFT_O1) +
+		m - fb[l[NX-1]][c].b;
 	    RansDecRenormSafe(&R[NX-1], &ptr, ptr_end + 8);
 	    l[NX-1] = c;
 	}

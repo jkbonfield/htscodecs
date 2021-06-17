@@ -74,7 +74,8 @@ unsigned char *rans_compress_O0_32x16_avx512(unsigned char *in,
     uint8_t* ptr;
     uint32_t F[256+MAGIC] = {0};
     int i, j, tab_size = 0, rle, x, z;
-    int bound = rans_compress_bound_4x16(in_size,0)-20; // -20 for order/size/meta
+    // -20 for order/size/meta
+    int bound = rans_compress_bound_4x16(in_size,0)-20;
 
     if (!out) {
 	*out_size = bound;
@@ -192,21 +193,39 @@ unsigned char *rans_compress_O0_32x16_avx512(unsigned char *in,
 
 	// Alternatives here:
 	// SHIFT right/left instead of AND: (very marginally slower)
-	//   rf1_hm = _mm512_and_epi32(rf1_hm, _mm512_set1_epi64((uint64_t)0xffffffff00000000));
+	//   rf1_hm = _mm512_and_epi32(
+	//           rf1_hm, _mm512_set1_epi64((uint64_t)0xffffffff00000000));
 	// vs
-	//   rf1_hm = _mm512_srli_epi64(rf1_hm, 32); rf1_hm = _mm512_slli_epi64(rf1_hm, 32);
-	__m512i rf1_hm = _mm512_mul_epu32(_mm512_srli_epi64(Rv1, 32), _mm512_srli_epi64(rfv1, 32));
-	__m512i rf2_hm = _mm512_mul_epu32(_mm512_srli_epi64(Rv2, 32), _mm512_srli_epi64(rfv2, 32));
+	//   rf1_hm = _mm512_srli_epi64(rf1_hm, 32);
+	//   rf1_hm = _mm512_slli_epi64(rf1_hm, 32);
+	__m512i rf1_hm = _mm512_mul_epu32(_mm512_srli_epi64(Rv1,  32),
+					  _mm512_srli_epi64(rfv1, 32));
+	__m512i rf2_hm = _mm512_mul_epu32(_mm512_srli_epi64(Rv2,  32),
+					  _mm512_srli_epi64(rfv2, 32));
 	__m512i rf1_lm = _mm512_srli_epi64(_mm512_mul_epu32(Rv1, rfv1), 32);
 	__m512i rf2_lm = _mm512_srli_epi64(_mm512_mul_epu32(Rv2, rfv2), 32);
-	rf1_hm = _mm512_and_epi32(rf1_hm, _mm512_set1_epi64((uint64_t)0xffffffff00000000));
-	rf2_hm = _mm512_and_epi32(rf2_hm, _mm512_set1_epi64((uint64_t)0xffffffff00000000));
+	rf1_hm = _mm512_and_epi32(rf1_hm,
+				  _mm512_set1_epi64((uint64_t)0xffffffff<<32));
+	rf2_hm = _mm512_and_epi32(rf2_hm,
+				  _mm512_set1_epi64((uint64_t)0xffffffff<<32));
 	rfv1 = _mm512_or_epi32(rf1_lm, rf1_hm);
 	rfv2 = _mm512_or_epi32(rf2_lm, rf2_hm);
 
 	// Or a pure masked blend approach, sadly slower.
-	// rfv1 = _mm512_mask_blend_epi32(0x5555, _mm512_mul_epu32(_mm512_srli_epi64(Rv1, 32), _mm512_srli_epi64(rfv1, 32)), _mm512_srli_epi64(_mm512_mul_epu32(Rv1, rfv1), 32));
-	// rfv2 = _mm512_mask_blend_epi32(0xaaaa, _mm512_srli_epi64(_mm512_mul_epu32(Rv2, rfv2), 32), _mm512_mul_epu32(_mm512_srli_epi64(Rv2, 32), _mm512_srli_epi64(rfv2, 32)));
+	// rfv1 = _mm512_mask_blend_epi32(0x5555,
+	//            _mm512_mul_epu32(
+	//                _mm512_srli_epi64(Rv1, 32),
+	//                _mm512_srli_epi64(rfv1, 32)),
+	//            _mm512_srli_epi64(
+	//                _mm512_mul_epu32(Rv1, rfv1),
+	//                32));
+	// rfv2 = _mm512_mask_blend_epi32(0xaaaa,
+	//            _mm512_srli_epi64(
+	//                _mm512_mul_epu32(Rv2, rfv2),
+	//                32),
+	//            _mm512_mul_epu32(
+	//                _mm512_srli_epi64(Rv2, 32),
+	//                _mm512_srli_epi64(rfv2, 32)));
 
 	SET512(biasv, SC);
 	__m512i shiftv1 = _mm512_srli_epi32(SDv1, 16);
@@ -215,11 +234,13 @@ unsigned char *rans_compress_O0_32x16_avx512(unsigned char *in,
 	__m512i qv1 = _mm512_srlv_epi32(rfv1, shiftv1);
 	__m512i qv2 = _mm512_srlv_epi32(rfv2, shiftv2);
 
-	qv1 = _mm512_mullo_epi32(qv1, _mm512_and_si512(SDv1, _mm512_set1_epi32(0xffff)));
+	qv1 = _mm512_mullo_epi32(qv1,
+	          _mm512_and_si512(SDv1,_mm512_set1_epi32(0xffff)));
 	qv1 = _mm512_add_epi32(qv1, biasv1);
 	Rv1 = _mm512_add_epi32(Rv1, qv1);
 
-	qv2 = _mm512_mullo_epi32(qv2, _mm512_and_si512(SDv2, _mm512_set1_epi32(0xffff)));
+	qv2 = _mm512_mullo_epi32(qv2,
+                  _mm512_and_si512(SDv2, _mm512_set1_epi32(0xffff)));
 	qv2 = _mm512_add_epi32(qv2, biasv2);
 	Rv2 = _mm512_add_epi32(Rv2, qv2);
     }
@@ -321,19 +342,29 @@ unsigned char *rans_uncompress_O0_32x16_avx512(unsigned char *in,
 
       //R[z] = f * (R[z] >> TF_SHIFT) + b;
       // approx 10 cycle latency on mullo.
-      R1 = _mm512_add_epi32(_mm512_mullo_epi32(_mm512_srli_epi32(R1, TF_SHIFT), f1), b1);
-      R2 = _mm512_add_epi32(_mm512_mullo_epi32(_mm512_srli_epi32(R2, TF_SHIFT), f2), b2);
+      R1 = _mm512_add_epi32(
+               _mm512_mullo_epi32(
+	           _mm512_srli_epi32(R1, TF_SHIFT), f1), b1);
+      R2 = _mm512_add_epi32(
+               _mm512_mullo_epi32(
+                   _mm512_srli_epi32(R2, TF_SHIFT), f2), b2);
 
       // renorm. this is the interesting part:
-      __mmask16 renorm_mask1 = _mm512_cmplt_epu32_mask(R1, _mm512_set1_epi32(RANS_BYTE_L));
-      __mmask16 renorm_mask2 = _mm512_cmplt_epu32_mask(R2, _mm512_set1_epi32(RANS_BYTE_L));
-      offset += _mm_popcnt_u32(renorm_mask1); // advance by however many words we actually read
-      __m512i renorm_words2 = _mm512_cvtepu16_epi32(_mm256_loadu_si256((const __m256i *) (sp+offset)));
+      __mmask16 renorm_mask1, renorm_mask2;
+      renorm_mask1=_mm512_cmplt_epu32_mask(R1, _mm512_set1_epi32(RANS_BYTE_L));
+      renorm_mask2=_mm512_cmplt_epu32_mask(R2, _mm512_set1_epi32(RANS_BYTE_L));
+      // advance by however many words we actually read
+      offset += _mm_popcnt_u32(renorm_mask1);
+      __m512i renorm_words2 = _mm512_cvtepu16_epi32(_mm256_loadu_si256(
+				      (const __m256i *)(sp+offset)));
 
-      __m512i renorm_vals1 = _mm512_maskz_expand_epi32(renorm_mask1, renorm_words1); // select masked only
-      __m512i renorm_vals2 = _mm512_maskz_expand_epi32(renorm_mask2, renorm_words2); // select masked only
-      R1 = _mm512_mask_slli_epi32(R1, renorm_mask1, R1, 16); // shift & add selected words
-      R2 = _mm512_mask_slli_epi32(R2, renorm_mask2, R2, 16); // shift & add selected words
+      // select masked only
+      __m512i renorm_vals1, renorm_vals2;
+      renorm_vals1 = _mm512_maskz_expand_epi32(renorm_mask1, renorm_words1);
+      renorm_vals2 = _mm512_maskz_expand_epi32(renorm_mask2, renorm_words2);
+      // shift & add selected words
+      R1 = _mm512_mask_slli_epi32(R1, renorm_mask1, R1, 16);
+      R2 = _mm512_mask_slli_epi32(R2, renorm_mask2, R2, 16);
       R1 = _mm512_add_epi32(R1, renorm_vals1);
       R2 = _mm512_add_epi32(R2, renorm_vals2);
 
@@ -350,7 +381,8 @@ unsigned char *rans_uncompress_O0_32x16_avx512(unsigned char *in,
       S1 = _mm512_i32gather_epi32(masked1, (int *)s3, sizeof(*s3));
       S2 = _mm512_i32gather_epi32(masked2, (int *)s3, sizeof(*s3));
 
-      offset += _mm_popcnt_u32(renorm_mask2); // advance by however many words we actually read
+      // advance by however many words we actually read
+      offset += _mm_popcnt_u32(renorm_mask2);
 
       //out[i+z] = S;
       _mm_storeu_si128((__m128i *)(out+i),    _mm512_cvtepi32_epi8(S1_));
@@ -691,7 +723,8 @@ unsigned char *rans_compress_O1_32x16_avx512(unsigned char *in,
 	// try rans0 compression of header
 	unsigned int u_freq_sz = cp-(op+1);
 	unsigned int c_freq_sz;
-	unsigned char *c_freq = rans_compress_O0_4x16(op+1, u_freq_sz, NULL, &c_freq_sz);
+	unsigned char *c_freq = rans_compress_O0_4x16(op+1, u_freq_sz, NULL,
+						      &c_freq_sz);
 	if (c_freq && c_freq_sz + 6 < cp-op) {
 	    *op++ |= 1; // compressed
 	    op += var_put_u32(op, NULL, u_freq_sz);
@@ -935,7 +968,8 @@ unsigned char *rans_uncompress_O1_32x16_avx512(unsigned char *in,
 	if (c_freq_sz >= cp_end - cp - 16)
 	    goto err;
 	tab_end = cp + c_freq_sz;
-	if (!(c_freq = rans_uncompress_O0_4x16(cp, c_freq_sz, NULL, u_freq_sz)))
+	if (!(c_freq = rans_uncompress_O0_4x16(cp, c_freq_sz, NULL,
+					       u_freq_sz)))
 	    goto err;
 	cp = c_freq;
 	c_freq_end = c_freq + u_freq_sz;
@@ -975,10 +1009,10 @@ unsigned char *rans_uncompress_O1_32x16_avx512(unsigned char *in,
                 for (y = 0; y < F[j]; y++) {
 		    // s3 maps [last_sym][Rmask] to next_sym
 		    if(shift == TF_SHIFT_O1)
-			s3[i][y+x] = (((uint32_t)F[j])<<(shift+8)) | (y<<8) | j;
+			s3[i][y+x] = (((uint32_t)F[j])<<(shift+8)) |(y<<8) |j;
 		    else
 			// smaller matrix for better cache
-			s3F[i][y+x] = (((uint32_t)F[j])<<(shift+8)) | (y<<8) | j;
+			s3F[i][y+x] = (((uint32_t)F[j])<<(shift+8)) |(y<<8) |j;
 		}
 
 		x += F[j];
@@ -1053,16 +1087,18 @@ unsigned char *rans_uncompress_O1_32x16_avx512(unsigned char *in,
 	    _masked2 = _mm512_add_epi32(_masked2, _Lv2);
 
 	    // This is the biggest bottleneck
-	    __m512i _Sv1 = _mm512_i32gather_epi32(_masked1, (int *)&s3F[0][0], sizeof(s3F[0][0]));
-	    __m512i _Sv2 = _mm512_i32gather_epi32(_masked2, (int *)&s3F[0][0], sizeof(s3F[0][0]));
+	    __m512i _Sv1 = _mm512_i32gather_epi32(_masked1, (int *)&s3F[0][0],
+						  sizeof(s3F[0][0]));
+	    __m512i _Sv2 = _mm512_i32gather_epi32(_masked2, (int *)&s3F[0][0],
+						  sizeof(s3F[0][0]));
 
 	    //  f[z] = S[z]>>(TF_SHIFT_O1+8);
 	    __m512i _fv1 = _mm512_srli_epi32(_Sv1, TF_SHIFT_O1+8);
 	    __m512i _fv2 = _mm512_srli_epi32(_Sv2, TF_SHIFT_O1+8);
 
 	    //  b[z] = (S[z]>>8) & mask;
-	    __m512i _bv1 = _mm512_and_si512(_mm512_srli_epi32(_Sv1, 8), _maskv);
-	    __m512i _bv2 = _mm512_and_si512(_mm512_srli_epi32(_Sv2, 8), _maskv);
+	    __m512i _bv1 = _mm512_and_si512(_mm512_srli_epi32(_Sv1,8), _maskv);
+	    __m512i _bv2 = _mm512_and_si512(_mm512_srli_epi32(_Sv2,8), _maskv);
 
 	    //  s[z] = S[z] & 0xff;
 	    __m512i _sv1 = _mm512_and_si512(_Sv1, _mm512_set1_epi32(0xff));
@@ -1088,16 +1124,22 @@ unsigned char *rans_uncompress_O1_32x16_avx512(unsigned char *in,
 	    _fv2 = _mm512_mask_blend_epi32(cmp2, _fv2, max_freq);
 
 	    //  R[z] = f[z] * (R[z] >> TF_SHIFT_O1) + b[z];
-	    _Rv1 = _mm512_add_epi32(_mm512_mullo_epi32(_mm512_srli_epi32(_Rv1,TF_SHIFT_O1),_fv1),_bv1);
-	    _Rv2 = _mm512_add_epi32(_mm512_mullo_epi32(_mm512_srli_epi32(_Rv2,TF_SHIFT_O1),_fv2),_bv2);
+	    _Rv1 = _mm512_add_epi32(
+		       _mm512_mullo_epi32(
+			   _mm512_srli_epi32(_Rv1,TF_SHIFT_O1), _fv1), _bv1);
+	    _Rv2 = _mm512_add_epi32(
+		       _mm512_mullo_epi32(
+			   _mm512_srli_epi32(_Rv2,TF_SHIFT_O1), _fv2), _bv2);
 
 	    //for (z = 0; z < NX; z++) lN[z] = c[z];
 	    _Lv1 = _sv1;
 	    _Lv2 = _sv2;
 
 	    // RansDecRenorm(&R[z], &ptr);
-	    __m512i _renorm_mask1 = _mm512_xor_si512(_Rv1, _mm512_set1_epi32(0x80000000));
-	    __m512i _renorm_mask2 = _mm512_xor_si512(_Rv2, _mm512_set1_epi32(0x80000000));
+	    __m512i _renorm_mask1 = _mm512_xor_si512(_Rv1,
+				        _mm512_set1_epi32(0x80000000));
+	    __m512i _renorm_mask2 = _mm512_xor_si512(_Rv2,
+					_mm512_set1_epi32(0x80000000));
 
 	    int _imask1 =_mm512_cmpgt_epi32_mask
 	        (_mm512_set1_epi32(RANS_BYTE_L-0x80000000), _renorm_mask1);
@@ -1214,32 +1256,42 @@ unsigned char *rans_uncompress_O1_32x16_avx512(unsigned char *in,
 	    _masked2 = _mm512_add_epi32(_masked2, _Lv2);
 
 	    // This is the biggest bottleneck
-	    __m512i _Sv1 = _mm512_i32gather_epi32(_masked1, (int *)&s3F[0][0], sizeof(s3F[0][0]));
-	    __m512i _Sv2 = _mm512_i32gather_epi32(_masked2, (int *)&s3F[0][0], sizeof(s3F[0][0]));
+	    __m512i _Sv1 = _mm512_i32gather_epi32(_masked1, (int *)&s3F[0][0],
+						  sizeof(s3F[0][0]));
+	    __m512i _Sv2 = _mm512_i32gather_epi32(_masked2, (int *)&s3F[0][0],
+						  sizeof(s3F[0][0]));
 
 	    //  f[z] = S[z]>>(TF_SHIFT_O1+8);
 	    __m512i _fv1 = _mm512_srli_epi32(_Sv1, TF_SHIFT_O1_FAST+8);
 	    __m512i _fv2 = _mm512_srli_epi32(_Sv2, TF_SHIFT_O1_FAST+8);
 
 	    //  b[z] = (S[z]>>8) & mask;
-	    __m512i _bv1 = _mm512_and_si512(_mm512_srli_epi32(_Sv1, 8), _maskv);
-	    __m512i _bv2 = _mm512_and_si512(_mm512_srli_epi32(_Sv2, 8), _maskv);
+	    __m512i _bv1 = _mm512_and_si512(_mm512_srli_epi32(_Sv1,8), _maskv);
+	    __m512i _bv2 = _mm512_and_si512(_mm512_srli_epi32(_Sv2,8), _maskv);
 
 	    //  s[z] = S[z] & 0xff;
 	    __m512i _sv1 = _mm512_and_si512(_Sv1, _mm512_set1_epi32(0xff));
 	    __m512i _sv2 = _mm512_and_si512(_Sv2, _mm512_set1_epi32(0xff));
 
 	    //  R[z] = f[z] * (R[z] >> TF_SHIFT_O1) + b[z];
-	    _Rv1 = _mm512_add_epi32(_mm512_mullo_epi32(_mm512_srli_epi32(_Rv1,TF_SHIFT_O1_FAST),_fv1),_bv1);
-	    _Rv2 = _mm512_add_epi32(_mm512_mullo_epi32(_mm512_srli_epi32(_Rv2,TF_SHIFT_O1_FAST),_fv2),_bv2);
+	    _Rv1 = _mm512_add_epi32(
+		       _mm512_mullo_epi32(
+			   _mm512_srli_epi32(_Rv1,TF_SHIFT_O1_FAST),
+			   _fv1), _bv1);
+	    _Rv2 = _mm512_add_epi32(
+		       _mm512_mullo_epi32(
+			   _mm512_srli_epi32(_Rv2,TF_SHIFT_O1_FAST),
+			   _fv2), _bv2);
 
 	    //for (z = 0; z < NX; z++) lN[z] = c[z];
 	    _Lv1 = _sv1;
 	    _Lv2 = _sv2;
 
 	    // RansDecRenorm(&R[z], &ptr);
-	    __m512i _renorm_mask1 = _mm512_xor_si512(_Rv1, _mm512_set1_epi32(0x80000000));
-	    __m512i _renorm_mask2 = _mm512_xor_si512(_Rv2, _mm512_set1_epi32(0x80000000));
+	    __m512i _renorm_mask1 = _mm512_xor_si512(_Rv1,
+					_mm512_set1_epi32(0x80000000));
+	    __m512i _renorm_mask2 = _mm512_xor_si512(_Rv2,
+				        _mm512_set1_epi32(0x80000000));
 
 	    int _imask1 =_mm512_cmpgt_epi32_mask
 	        (_mm512_set1_epi32(RANS_BYTE_L-0x80000000), _renorm_mask1);
