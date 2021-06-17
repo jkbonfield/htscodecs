@@ -925,14 +925,6 @@ unsigned char *rans_uncompress_O1_4x16(unsigned char *in, unsigned int in_size,
  */
 #include "rANS_static32x16pr.h"
 
-#ifdef HAVE_AVX2
-#include "rANS_static32x16pr_avx2.h"
-#endif
-
-#ifdef HAVE_AVX512
-#include "rANS_static32x16pr_avx512.h"
-#endif
-
 static int force_sw32_enc = 0;
 static int force_sw32_dec = 0;
 static int disable_avx512 = 0;
