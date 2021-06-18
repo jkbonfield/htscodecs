@@ -95,6 +95,7 @@ int main(int argc, char **argv) {
     extern int optind;
     extern void force_sw32_decoder(void);
     extern void rans_disable_avx512(void);
+    extern void rans_disable_avx2(void);
 
     while ((opt = getopt(argc, argv, "o:dtr")) != -1) {
 	switch (opt) {
@@ -107,6 +108,8 @@ int main(int argc, char **argv) {
 		force_sw32_decoder();
 	    if (order & 0x800 /*X_NO_AVX512*/)
 		rans_disable_avx512();
+	    if (order & 0x1000 /*X_NO_AVX2*/)
+		rans_disable_avx2();
 	    break;
 	}
 

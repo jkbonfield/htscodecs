@@ -105,7 +105,27 @@ dnl AC_CHECK_LIB([bsc], [bsc_compress], [
 dnl 	LIBS="-lbsc $LIBS"
 dnl 	AC_DEFINE([HAVE_LIBBSC],1,[Define to 1 if you have the libbsc library.])])
 
-dnl Check if we can use our AVX2 implementations of rANS 4x16 codec.
+dnl Check if we can use our SSSE3 implementations of rANS 32x16 codec.
+AX_CHECK_COMPILE_FLAG([-mssse3], [
+        MSSSE3=-mssse3
+	AC_SUBST(MSSSE3)
+        AC_DEFINE([HAVE_SSSE3],1,[Defined to 1 if the compiler can issue SSSE3 instructions.])])
+
+dnl Check if we can use popcnt instructions
+AX_CHECK_COMPILE_FLAG([-mpopcnt], [
+        MPOPCNT=-mpopcnt
+	AC_SUBST(MPOPCNT)
+        AC_DEFINE([HAVE_POPCNT],1,[Defined to 1 if the compiler can issue popcnt instructions.])])
+
+dnl Check if we can use our SSE4.1 too.  This *may* always imply SSSE3?
+dnl It may be easier just to target an old era of cpu than -mssse3 -msse4.1
+dnl -mpopcnt.  Eg -march=nehalem.  I don't know how wide spread that is.
+AX_CHECK_COMPILE_FLAG([-msse4.1], [
+        MSSSE3=-msse4.1
+	AC_SUBST(MSSE4_1)
+        AC_DEFINE([HAVE_SSE4_1],1,[Defined to 1 if the compiler can issue SSE4.1 instructions.])])
+
+dnl Check if we can use our AVX2 implementations.
 AX_CHECK_COMPILE_FLAG([-mavx2], [
         MAVX2=-mavx2
 	AC_SUBST(MAVX2)

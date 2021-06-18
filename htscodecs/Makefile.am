@@ -46,6 +46,7 @@ libhtscodecs_la_SOURCES = \
 	rANS_word.h \
 	rANS_static32x16pr.c \
 	rANS_static32x16pr.h \
+	rANS_static32x16pr_sse4.c \
 	rANS_static32x16pr_avx2.c \
 	rANS_static32x16pr_avx512.c \
 	permute.h \
@@ -66,6 +67,8 @@ libhtscodecs_la_LDFLAGS = -version-info @VERS_CURRENT@:@VERS_REVISION@:@VERS_AGE
 libhtscodecs_la_LIBADD = @LIBZ@
 
 # AM_CFLAGS so users can override CFLAGS without breaking the build.
+rANS_static32x16pr_sse4.o:   AM_CFLAGS+=@MSSE4_1@ @MSSSE3@ @MPOPCNT@
+rANS_static32x16pr_sse4.lo:  AM_CFLAGS+=@MSSE4_1@ @MSSSE3@ @MPOPCNT@
 rANS_static32x16pr_avx2.o:   AM_CFLAGS+=@MAVX2@
 rANS_static32x16pr_avx2.lo:  AM_CFLAGS+=@MAVX2@
 rANS_static32x16pr_avx512.o:   AM_CFLAGS+=@MAVX512@
