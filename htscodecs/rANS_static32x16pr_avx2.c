@@ -132,6 +132,12 @@ static inline __m256i _mm256_i32gather_epi32x(int *b, __m256i idx, int size) {
 #define _mm256_i32gather_epi32x _mm256_i32gather_epi32
 #endif
 
+static inline __m128i _mm_i32gather_epi32x(int *b, __m128i idx, int size) {
+    int c[4] __attribute__((aligned(32)));
+    _mm_store_si128((__m128i *)c, idx);
+    return _mm_set_epi32(b[c[3]], b[c[2]], b[c[1]], b[c[0]]);
+}
+
 unsigned char *rans_compress_O0_32x16_avx2(unsigned char *in,
 					   unsigned int in_size,
 					   unsigned char *out,
@@ -473,16 +479,18 @@ unsigned char *rans_uncompress_O0_32x16_avx2(unsigned char *in,
 	sv1 = _mm256_packus_epi16(sv1, sv1);
 
 	// c =  R[z] < RANS_BYTE_L;
+
+// The lack of unsigned comparisons means we have to jump through hoops.
+// in AVX2 land the second version comes out best (and first in SSE land).
+
+//#define _mm256_cmplt_epu32_imm(a,b) _mm256_andnot_si256(_mm256_cmpeq_epi32(_mm256_max_epu32((a),_mm256_set1_epi32(b)), (a)), _mm256_set1_epi32(-1));
+
+#define _mm256_cmplt_epu32_imm(a,b) _mm256_cmpgt_epi32(_mm256_set1_epi32((b)-0x80000000), _mm256_xor_si256((a), _mm256_set1_epi32(0x80000000)))
+
 	__m256i renorm_mask1, renorm_mask2;
-	renorm_mask1 = _mm256_xor_si256(Rv1, _mm256_set1_epi32(0x80000000));
-	renorm_mask2 = _mm256_xor_si256(Rv2, _mm256_set1_epi32(0x80000000));
-	renorm_mask1 = _mm256_cmpgt_epi32(
-		           _mm256_set1_epi32(RANS_BYTE_L-0x80000000),
-			   renorm_mask1);
-	renorm_mask2 = _mm256_cmpgt_epi32(
-		           _mm256_set1_epi32(RANS_BYTE_L-0x80000000),
-			   renorm_mask2);
-	
+        renorm_mask1 = _mm256_cmplt_epu32_imm(Rv1, RANS_BYTE_L);
+        renorm_mask2 = _mm256_cmplt_epu32_imm(Rv2, RANS_BYTE_L);
+
 	// y = (R[z] << 16) | V[z];
 	unsigned int imask1 = _mm256_movemask_ps((__m256)renorm_mask1);
 	__m256i idx1 = _mm256_load_si256((const __m256i*)permute[imask1]);
@@ -543,18 +551,12 @@ unsigned char *rans_uncompress_O0_32x16_avx2(unsigned char *in,
 	// packs_epi16 ponmlkji ponmlkji  hgfedcba hgfedcba
 	sv3 = _mm256_packus_epi32(sv3, sv4);
 	sv3 = _mm256_permute4x64_epi64(sv3, 0xd8);
-	__m256i renorm_mask3, renorm_mask4;
-	renorm_mask3 = _mm256_xor_si256(Rv3, _mm256_set1_epi32(0x80000000));
-	renorm_mask4 = _mm256_xor_si256(Rv4, _mm256_set1_epi32(0x80000000));
-	sv3 = _mm256_packus_epi16(sv3, sv3);
-	// c =  R[z] < RANS_BYTE_L;
 
-	renorm_mask3 = _mm256_cmpgt_epi32(
-		           _mm256_set1_epi32(RANS_BYTE_L-0x80000000),
-			   renorm_mask3);
-	renorm_mask4 = _mm256_cmpgt_epi32(
-			   _mm256_set1_epi32(RANS_BYTE_L-0x80000000),
-			   renorm_mask4);
+	// c =  R[z] < RANS_BYTE_L;
+	__m256i renorm_mask3, renorm_mask4;
+	renorm_mask3 = _mm256_cmplt_epu32_imm(Rv3, RANS_BYTE_L);
+	sv3 = _mm256_packus_epi16(sv3, sv3);
+	renorm_mask4 = _mm256_cmplt_epu32_imm(Rv4, RANS_BYTE_L);
 	
 	*(uint64_t *)&out[i+16] = _mm256_extract_epi64(sv3, 0);
 	*(uint64_t *)&out[i+24] = _mm256_extract_epi64(sv3, 2);
@@ -603,7 +605,6 @@ unsigned char *rans_uncompress_O0_32x16_avx2(unsigned char *in,
     free(out_free);
     return NULL;
 }
-
 
 //-----------------------------------------------------------------------------
 

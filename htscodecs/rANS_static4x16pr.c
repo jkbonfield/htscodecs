@@ -928,11 +928,15 @@ unsigned char *rans_uncompress_O1_4x16(unsigned char *in, unsigned int in_size,
 static int force_sw32_enc = 0;
 static int force_sw32_dec = 0;
 static int disable_avx512 = 0;
+static int disable_avx2   = 0;
 void force_sw32_decoder(void) {
     force_sw32_dec = 1;
 }
 void rans_disable_avx512(void) {
     disable_avx512 = 1;
+}
+void rans_disable_avx2(void) {
+    disable_avx2 = 1;
 }
 
 #if defined(__GNUC__) && defined(__x86_64__)
@@ -945,7 +949,6 @@ unsigned char *(*rans_enc_func(int do_simd, int order))
      unsigned int in_size,
      unsigned char *out,
      unsigned int *out_size) {
-
 #if defined(bit_AVX512F) && defined(HAVE_AVX512)
     unsigned int eax = 0, ebx = 0, ecx = 0, edx = 0;
 
@@ -1012,60 +1015,66 @@ unsigned char *(*rans_dec_func(int do_simd, int order))
      unsigned int in_size,
      unsigned char *out,
      unsigned int out_size) {
-#if defined(bit_AVX512F) && defined(HAVE_AVX512)
-    unsigned int eax = 0, ebx = 0, ecx = 0, edx = 0;
 
     if (do_simd) {
-	int level = __get_cpuid_max(0, NULL);
-	if (level >= 7) {
-	    __cpuid_count(7, 0, eax, ebx, ecx, edx);
-	    if (force_sw32_dec)
-		ebx &= ~(bit_AVX512F|bit_AVX2);
-	    if (disable_avx512)
-		ebx &= ~bit_AVX512F;
-	    if (order & 1) {
-		return ebx & bit_AVX512F
-		    ? rans_uncompress_O1_32x16_avx512
-		    : (ebx & bit_AVX2
-		       ? rans_uncompress_O1_32x16_avx2
-		       : rans_uncompress_O1_32x16);
-	    } else {
-		return ebx & bit_AVX512F
-		    ? rans_uncompress_O0_32x16_avx512
-		    : ( ebx & bit_AVX2
-			? rans_uncompress_O0_32x16_avx2
-			: rans_uncompress_O0_32x16);
-	    }
-	}
-    }
-#elif defined(bit_AVX2) && defined(HAVE_AVX2)
-    unsigned int eax = 0, ebx = 0, ecx = 0, edx = 0;
+	unsigned int eax = 0, ebx = 0, ecx = 0, edx = 0;
+	int have_ssse3   = 0;
+	int have_sse4_1  = 0;
+	int have_popcnt  = 0;
+	int have_avx2    = 0;
+	int have_avx512f = 0;
 
-    if (do_simd) {
 	int level = __get_cpuid_max(0, NULL);
-	if (level >= 7) {
-	    __cpuid_count(7, 0, eax, ebx, ecx, edx);
-	    if (force_sw32_dec)
-		ebx &= ~bit_AVX2;
-	    if (order & 1) {
-		return ebx & bit_AVX2
-		    ? rans_uncompress_O1_32x16_avx2
-		    : rans_uncompress_O1_32x16;
-	    } else {
-		return ebx & bit_AVX2
-		    ? rans_uncompress_O0_32x16_avx2
-		    : rans_uncompress_O0_32x16;
-	    }
-	}
-    }
-#else
-    if (do_simd) {
-	return order & 1
-	    ? rans_uncompress_O1_32x16
-	    : rans_uncompress_O0_32x16;
-    }
+	if (level >= 1) {
+	    __cpuid_count(1, 0, eax, ebx, ecx, edx);
+#if defined(bit_SSSE3)
+	    have_ssse3 = ecx & bit_SSSE3;
 #endif
+#if defined(bit_POPCNT)
+	    have_popcnt = ecx & bit_POPCNT;
+#endif
+#if defined(bit_SSE4_1)
+	    have_sse4_1 = ecx & bit_SSE4_1;
+#endif
+	}
+	if (level >= 7) {
+	    __cpuid_count(7, 0, eax, ebx, ecx, edx);
+#if defined(bit_AVX2)
+	    have_avx2 = ebx & bit_AVX2;
+#endif
+#if defined(bit_AVX2)
+	    have_avx512f = ebx & bit_AVX512F;
+#endif
+	}
 
+	if (disable_avx512) have_avx512f = 0;
+	if (disable_avx2)   have_avx2    = 0;
+	if (force_sw32_dec || !have_popcnt)
+	    have_avx512f = have_avx2 = have_sse4_1 = 0;
+	if (!have_ssse3)
+	    have_sse4_1 = 0;
+
+//	fprintf(stderr, "SSSE3 %d, SSE4.1 %d, POPCNT %d, AVX2 %d, AVX512F %d\n",
+//		have_ssse3, have_sse4_1, have_popcnt, have_avx2, have_avx512f);
+
+	if (order & 1) {
+	    return have_avx512f
+		? rans_uncompress_O1_32x16_avx512
+		: (have_avx2
+		   ? rans_uncompress_O1_32x16_avx2
+		   : rans_uncompress_O1_32x16);
+	} else {
+	    return have_avx512f
+		? rans_uncompress_O0_32x16_avx512
+		: (have_avx2
+		   ? rans_uncompress_O0_32x16_avx2
+		   : (have_sse4_1
+		      ? rans_uncompress_O0_32x16_sse4
+		      : rans_uncompress_O0_32x16));
+	}
+    }
+
+    // Else all SIMD disabled
     return order & 1
 	? rans_uncompress_O1_4x16
 	: rans_uncompress_O0_4x16;
