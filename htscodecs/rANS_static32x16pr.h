@@ -84,6 +84,11 @@ unsigned char *rans_uncompress_O0_32x16_sse4(unsigned char *in,
 					     unsigned int in_size,
 					     unsigned char *out,
 					     unsigned int out_sz);
+
+unsigned char *rans_uncompress_O1_32x16_sse4(unsigned char *in,
+					     unsigned int in_size,
+					     unsigned char *out,
+					     unsigned int out_sz);
 #endif
 
 //----------------------------------------------------------------------
