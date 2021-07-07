@@ -414,6 +414,7 @@ int compute_shift(uint32_t *F0, uint32_t (*F)[256], uint32_t *T, int *S) {
 //    fprintf(stderr, "e10/12 = %f %f %f, shift %d\n",
 //    	    e10/log(256), e12/log(256), e10/e12, shift);
 
+    return 12;
     return shift;
 }
 
@@ -949,61 +950,64 @@ unsigned char *(*rans_enc_func(int do_simd, int order))
      unsigned int in_size,
      unsigned char *out,
      unsigned int *out_size) {
-#if defined(bit_AVX512F) && defined(HAVE_AVX512)
-    unsigned int eax = 0, ebx = 0, ecx = 0, edx = 0;
+    if (do_simd) {
+	unsigned int eax = 0, ebx = 0, ecx = 0, edx = 0;
+	int have_ssse3   = 0;
+	int have_sse4_1  = 0;
+	int have_popcnt  = 0;
+	int have_avx2    = 0;
+	int have_avx512f = 0;
 
-    if (do_simd) {
 	int level = __get_cpuid_max(0, NULL);
-	if (level >= 7) {
-	    __cpuid_count(7, 0, eax, ebx, ecx, edx);
-	    if (force_sw32_enc)
-	        ebx &= ~(bit_AVX512F|bit_AVX2);
-	    if (disable_avx512)
-		ebx &= ~bit_AVX512F;
-	    if (order & 1) {
-		return ebx & bit_AVX512F
-		    ? rans_compress_O1_32x16_avx512
-		    : (ebx & bit_AVX2
-		       ? rans_compress_O1_32x16_avx2
-		       : rans_compress_O1_32x16);
-	    } else {
-		return ebx & bit_AVX512F
-		    ? rans_compress_O0_32x16_avx512
-		    : ( ebx & bit_AVX2
-			? rans_compress_O0_32x16_avx2
-			: rans_compress_O0_32x16);
-	    }
-	}
-    }
-#elif defined(bit_AVX2) && defined(HAVE_AVX2)
-    unsigned int eax = 0, ebx = 0, ecx = 0, edx = 0;
-
-    if (do_simd) {
-	int level = __get_cpuid_max(0, NULL);
-	if (level >= 7) {
-	    __cpuid_count(7, 0, eax, ebx, ecx, edx);
-	    if (force_sw32_enc)
-	        ebx &= ~bit_AVX2;
-	    if (order & 1) {
-		return ebx & bit_AVX2
-		    ? rans_compress_O1_32x16_avx2
-		    : rans_compress_O1_32x16;
-	    } else {
-		return ebx & bit_AVX2
-		    ? rans_compress_O0_32x16_avx2
-		    : rans_compress_O0_32x16;
-	    }
-	}
-    }
-#else
-    if (do_simd) {
-	return order & 1
-	    ? rans_compress_O1_32x16
-	    : rans_compress_O0_32x16;
-	
-    }
+	if (level >= 1) {
+	    __cpuid_count(1, 0, eax, ebx, ecx, edx);
+#if defined(bit_SSSE3)
+	    have_ssse3 = ecx & bit_SSSE3;
 #endif
+#if defined(bit_POPCNT)
+	    have_popcnt = ecx & bit_POPCNT;
+#endif
+#if defined(bit_SSE4_1)
+	    have_sse4_1 = ecx & bit_SSE4_1;
+#endif
+	}
+	if (level >= 7) {
+	    __cpuid_count(7, 0, eax, ebx, ecx, edx);
+#if defined(bit_AVX2)
+	    have_avx2 = ebx & bit_AVX2;
+#endif
+#if defined(bit_AVX2)
+	    have_avx512f = ebx & bit_AVX512F;
+#endif
+	}
 
+	if (disable_avx512) have_avx512f = 0;
+	if (disable_avx2)   have_avx2    = 0;
+	if (force_sw32_dec || !have_popcnt)
+	    have_avx512f = have_avx2 = have_sse4_1 = 0;
+	if (!have_ssse3)
+	    have_sse4_1 = 0;
+
+	if (order & 1) {
+	    return have_avx512f
+		? rans_compress_O1_32x16_avx512
+		: (have_avx2
+		   ? rans_compress_O1_32x16_avx2
+		   : (have_sse4_1
+		      ? rans_compress_O1_32x16
+		      : rans_compress_O1_32x16));
+	} else {
+	    return have_avx512f
+		? rans_compress_O0_32x16_avx512
+		: (have_avx2
+		   ? rans_compress_O0_32x16_avx2
+		   : (have_sse4_1
+		      ? rans_compress_O0_32x16
+		      : rans_compress_O0_32x16));
+	}
+    }
+
+    // Else all SIMD disabled
     return order & 1
 	? rans_compress_O1_4x16
 	: rans_compress_O0_4x16;
@@ -1062,7 +1066,9 @@ unsigned char *(*rans_dec_func(int do_simd, int order))
 		? rans_uncompress_O1_32x16_avx512
 		: (have_avx2
 		   ? rans_uncompress_O1_32x16_avx2
-		   : rans_uncompress_O1_32x16);
+		   : (have_sse4_1
+		      ? rans_uncompress_O1_32x16_sse4
+		      : rans_uncompress_O1_32x16));
 	} else {
 	    return have_avx512f
 		? rans_uncompress_O0_32x16_avx512
