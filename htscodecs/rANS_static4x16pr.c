@@ -414,7 +414,7 @@ int compute_shift(uint32_t *F0, uint32_t (*F)[256], uint32_t *T, int *S) {
 //    fprintf(stderr, "e10/12 = %f %f %f, shift %d\n",
 //    	    e10/log(256), e12/log(256), e10/e12, shift);
 
-    return 12;
+    //return 12;
     return shift;
 }
 

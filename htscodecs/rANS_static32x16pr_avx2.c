@@ -150,7 +150,6 @@ unsigned char *rans_compress_O0_32x16_avx2(unsigned char *in,
     int i, j, tab_size = 0, rle, x, z;
     // -20 for order/size/meta
     int bound = rans_compress_bound_4x16(in_size,0)-20;
-    uint32_t SB[256], SA[256], SD[256], SC[256];
 
     if (!out) {
 	*out_size = bound;
@@ -204,14 +203,6 @@ unsigned char *rans_compress_O0_32x16_avx2(unsigned char *in,
     while (z-- > 0)
       RansEncPutSymbol(&ransN[z], &ptr, &syms[in[in_size-(i-z)]]);
 
-    // Build lookup tables for SIMD encoding
-    for (i = 0; i < 256; i++) {
-	SB[i] = syms[i].x_max;
-	SA[i] = syms[i].rcp_freq;
-	SD[i] = (syms[i].cmpl_freq<<0) | (syms[i].rcp_shift<<16);
-	SC[i] = syms[i].bias;
-    }
-
     uint16_t *ptr16 = (uint16_t *)ptr;
 
     LOAD(Rv, ransN);
@@ -219,17 +210,90 @@ unsigned char *rans_compress_O0_32x16_avx2(unsigned char *in,
     for (i=(in_size &~(NX-1)); i>0; i-=NX) {
 	uint8_t *c = &in[i-NX];
 
-// Set vs gather methods of loading data.
-// Gather is faster, but can only schedule a few to run in parallel.
-#define SET1(a,b) __m256i a##1 = _mm256_set_epi32(b[c[ 7]], b[c[ 6]], b[c[ 5]], b[c[ 4]], b[c[ 3]], b[c[ 2]], b[c[ 1]], b[c[ 0]])
-#define SET2(a,b) __m256i a##2 = _mm256_set_epi32(b[c[15]], b[c[14]], b[c[13]], b[c[12]], b[c[11]], b[c[10]], b[c[ 9]], b[c[ 8]])
-#define SET3(a,b) __m256i a##3 = _mm256_set_epi32(b[c[23]], b[c[22]], b[c[21]], b[c[20]], b[c[19]], b[c[18]], b[c[17]], b[c[16]])
-#define SET4(a,b) __m256i a##4 = _mm256_set_epi32(b[c[31]], b[c[30]], b[c[29]], b[c[28]], b[c[27]], b[c[26]], b[c[25]], b[c[24]])
-#define SET(a,b) SET1(a,b);SET2(a,b);SET3(a,b);SET4(a,b)
+	// We need to gather sym[curr_char][last_char] structs.
+	// These hold 4 32-bit values, so are 128 bit each, and
+	// are loaded from 32 distinct addresses.
+	//
+	// We load them into 32 128-bit lanes and then combine to get
+	// 16 avx-256 registers.
+	// These are now ABCD ABCD ABCD ABCD... orientation
+	// Code we can then "gather" from these registers via a combination
+	// of shuffle / permutes / and / or operations.  This is less
+	// IO than repeating 4 sets of gathers/loads 32-times over.
+
+	// DCBA holding 4 elements in a syms[] array
+	// -> 4-way rotate via shuffles
+	// [0] DCBA  11 10 01 00  E4
+	// [1] CBAD  10 01 00 11  93
+	// [2] BADC  01 00 11 10  4E
+	// [3] ADCB  00 11 10 01  39
+	//
+	// Then AND to select relevant lanes and OR
+	// [0] ......A0
+	// [1] ....A1..
+	// [2] ..A2....
+	// [3] A3......  OR to get A3A2A1A0
+	//
+	// or:
+	// [0] ....B0..
+	// [1] ..B1....
+	// [2] B2......
+	// [3] ......B3  OR to get B2B1B0B3 and shuffle to B3B2B1B0
+
+	__m256i sh[16];
+	for (z = 0; z < 16; z+=4) {
+	    int Z = i - NX + z*2;
+
+#define m128_to_256 _mm256_castsi128_si256
+	    __m256i t0, t1, t2, t3;
+	    __m128i *s0, *s1, *s2, *s3;
+	    s0 = (__m128i *)((int *)syms + 4*in[Z+0]);
+	    s1 = (__m128i *)((int *)syms + 4*in[Z+4]);
+	    s2 = (__m128i *)((int *)syms + 4*in[Z+1]);
+	    s3 = (__m128i *)((int *)syms + 4*in[Z+5]);
+	    t0 = _mm256_shuffle_epi32(m128_to_256(_mm_loadu_si128(s0)), 0xE4);
+	    t1 = _mm256_shuffle_epi32(m128_to_256(_mm_loadu_si128(s1)), 0xE4);
+	    t2 = _mm256_shuffle_epi32(m128_to_256(_mm_loadu_si128(s2)), 0x93);
+	    t3 = _mm256_shuffle_epi32(m128_to_256(_mm_loadu_si128(s3)), 0x93);
+
+	    sh[z+0] = _mm256_permute2x128_si256(t0, t1, 0x20);
+	    sh[z+1] = _mm256_permute2x128_si256(t2, t3, 0x20);
+
+	    s0 = (__m128i *)((int *)syms + 4*in[Z+2]);
+	    s1 = (__m128i *)((int *)syms + 4*in[Z+6]);
+	    s2 = (__m128i *)((int *)syms + 4*in[Z+3]);
+	    s3 = (__m128i *)((int *)syms + 4*in[Z+7]);
+	    t0 = _mm256_shuffle_epi32(m128_to_256(_mm_loadu_si128(s0)), 0x4E);
+	    t1 = _mm256_shuffle_epi32(m128_to_256(_mm_loadu_si128(s1)), 0x4E);
+	    t2 = _mm256_shuffle_epi32(m128_to_256(_mm_loadu_si128(s2)), 0x39);
+	    t3 = _mm256_shuffle_epi32(m128_to_256(_mm_loadu_si128(s3)), 0x39);
+
+	    sh[z+2] = _mm256_permute2x128_si256(t0, t1, 0x20);
+	    sh[z+3] = _mm256_permute2x128_si256(t2, t3, 0x20);
+
+	    // potential to set xmax, rf, bias, and SD in-situ here, removing
+	    // the need to hold sh[] in regs.  Doing so doesn't seem to speed
+	    // things up though.
+	}
+
+	__m256i xA = _mm256_set_epi32(0,0,0,-1, 0,0,0,-1);
+	__m256i xB = _mm256_set_epi32(0,0,-1,0, 0,0,-1,0);
+	__m256i xC = _mm256_set_epi32(0,-1,0,0, 0,-1,0,0);
+	__m256i xD = _mm256_set_epi32(-1,0,0,0, -1,0,0,0);
+
+#define SYM_LOAD(x, A, B, C, D)						\
+	_mm256_or_si256(_mm256_or_si256(_mm256_and_si256(sh[x+0], A),	\
+					_mm256_and_si256(sh[x+1], B)),	\
+  	                _mm256_or_si256(_mm256_and_si256(sh[x+2], C),	\
+			                _mm256_and_si256(sh[x+3], D)))
 
 	// Renorm:
 	// if (x > x_max) {*--ptr16 = x & 0xffff; x >>= 16;}
-	SET(xmax, SB);
+	__m256i xmax1 = SYM_LOAD( 0, xA, xB, xC, xD);
+	__m256i xmax2 = SYM_LOAD( 4, xA, xB, xC, xD);
+	__m256i xmax3 = SYM_LOAD( 8, xA, xB, xC, xD);
+	__m256i xmax4 = SYM_LOAD(12, xA, xB, xC, xD);
+
 	__m256i cv1 = _mm256_cmpgt_epi32(Rv1, xmax1);
 	__m256i cv2 = _mm256_cmpgt_epi32(Rv2, xmax2);
 	__m256i cv3 = _mm256_cmpgt_epi32(Rv3, xmax3);
@@ -296,14 +360,20 @@ unsigned char *rans_compress_O0_32x16_avx2(unsigned char *in,
 	// (AVX512 allows us to hold it all in 64-bit lanes and use mullo_epi64
 	// plus a shift.  KNC has mulhi_epi32, but not sure if this is
 	// available.)
-	SET(rfv,   SA);
+	__m256i rfv1 = _mm256_shuffle_epi32(SYM_LOAD( 0, xB, xC, xD, xA),0x39);
+	__m256i rfv2 = _mm256_shuffle_epi32(SYM_LOAD( 4, xB, xC, xD, xA),0x39);
+	__m256i rfv3 = _mm256_shuffle_epi32(SYM_LOAD( 8, xB, xC, xD, xA),0x39);
+	__m256i rfv4 = _mm256_shuffle_epi32(SYM_LOAD(12, xB, xC, xD, xA),0x39);
 
 	rfv1 = _mm256_mulhi_epu32(Rv1, rfv1);
 	rfv2 = _mm256_mulhi_epu32(Rv2, rfv2);
 	rfv3 = _mm256_mulhi_epu32(Rv3, rfv3);
 	rfv4 = _mm256_mulhi_epu32(Rv4, rfv4);
 
-	SET(SDv,   SD);
+	__m256i SDv1 = _mm256_shuffle_epi32(SYM_LOAD( 0, xD, xA, xB, xC),0x93);
+	__m256i SDv2 = _mm256_shuffle_epi32(SYM_LOAD( 4, xD, xA, xB, xC),0x93);
+	__m256i SDv3 = _mm256_shuffle_epi32(SYM_LOAD( 8, xD, xA, xB, xC),0x93);
+	__m256i SDv4 = _mm256_shuffle_epi32(SYM_LOAD(12, xD, xA, xB, xC),0x93);
 
 	__m256i shiftv1 = _mm256_srli_epi32(SDv1, 16);
 	__m256i shiftv2 = _mm256_srli_epi32(SDv2, 16);
@@ -331,7 +401,10 @@ unsigned char *rans_compress_O0_32x16_avx2(unsigned char *in,
 	qv3 = _mm256_mullo_epi32(qv3, freqv3);
 	qv4 = _mm256_mullo_epi32(qv4, freqv4);
 
-	SET(biasv, SC);
+	__m256i biasv1=_mm256_shuffle_epi32(SYM_LOAD( 0, xC, xD, xA, xB),0x4E);
+	__m256i biasv2=_mm256_shuffle_epi32(SYM_LOAD( 4, xC, xD, xA, xB),0x4E);
+	__m256i biasv3=_mm256_shuffle_epi32(SYM_LOAD( 8, xC, xD, xA, xB),0x4E);
+	__m256i biasv4=_mm256_shuffle_epi32(SYM_LOAD(12, xC, xD, xA, xB),0x4E);
 
 	qv1 = _mm256_add_epi32(qv1, biasv1);
 	qv2 = _mm256_add_epi32(qv2, biasv2);
@@ -612,7 +685,7 @@ unsigned char *rans_compress_O1_32x16_avx2(unsigned char *in, unsigned int in_si
 					   unsigned char *out, unsigned int *out_size) {
     unsigned char *cp, *out_end, *op;
     unsigned int tab_size;
-    RansEncSymbol syms[256][256];
+    RansEncSymbol syms[256][256] __attribute__((aligned(32)));
     int bound = rans_compress_bound_4x16(in_size,1)-20, z;
     RansState ransN[NX] __attribute__((aligned(32)));
 
@@ -762,35 +835,97 @@ unsigned char *rans_compress_O1_32x16_avx2(unsigned char *in, unsigned int in_si
     LOAD(Rv, ransN);
 
     for (; iN[0] >= 0; ) {
-	uint32_t c[NX];
+	// We need to gather sym[curr_char][last_char] structs.
+	// These hold 4 32-bit values, so are 128 bit each, and
+	// are loaded from 32 distinct addresses.
+	//
+	// We load them into 32 128-bit lanes and then combine to get
+	// 16 avx-256 registers.
+	// These are now ABCD ABCD ABCD ABCD... orientation
+	// Code we can then "gather" from these registers via a combination
+	// of shuffle / permutes / and / or operations.  This is less
+	// IO than repeating 4 sets of gathers/loads 32-times over.
 
-	// Gather all the symbol values together in adjacent arrays.
-	// Better to just use raw set?
-	RansEncSymbol_simd *sN[NX] __attribute__((aligned(32)));
-	for (z = 0; z < NX; z++)
-	    sN[z] = (RansEncSymbol_simd *)&syms[c[z] = in[iN[z]]][lN[z]];
+	// DCBA holding 4 elements in a syms[] array
+	// -> 4-way rotate via shuffles
+	// [0] DCBA  11 10 01 00  E4
+	// [1] CBAD  10 01 00 11  93
+	// [2] BADC  01 00 11 10  4E
+	// [3] ADCB  00 11 10 01  39
+	//
+	// Then AND to select relevant lanes and OR
+	// [0] ......A0
+	// [1] ....A1..
+	// [2] ..A2....
+	// [3] A3......  OR to get A3A2A1A0
+	//
+	// or:
+	// [0] ....B0..
+	// [1] ..B1....
+	// [2] B2......
+	// [3] ......B3  OR to get B2B1B0B3 and shuffle to B3B2B1B0
 
-#define SET1x(a,b,x) __m256i a##1 = _mm256_set_epi32(b[ 7]->x, b[ 6]->x, b[ 5]->x, b[ 4]->x, b[ 3]->x, b[ 2]->x, b[ 1]->x, b[ 0]->x)
-#define SET2x(a,b,x) __m256i a##2 = _mm256_set_epi32(b[15]->x, b[14]->x, b[13]->x, b[12]->x, b[11]->x, b[10]->x, b[ 9]->x, b[ 8]->x)
-#define SET3x(a,b,x) __m256i a##3 = _mm256_set_epi32(b[23]->x, b[22]->x, b[21]->x, b[20]->x, b[19]->x, b[18]->x, b[17]->x, b[16]->x)
-#define SET4x(a,b,x) __m256i a##4 = _mm256_set_epi32(b[31]->x, b[30]->x, b[29]->x, b[28]->x, b[27]->x, b[26]->x, b[25]->x, b[24]->x)
-#define SETx(a,b,x) SET1x(a,b,x);SET2x(a,b,x);SET3x(a,b,x);SET4x(a,b,x)
+	__m256i sh[16];
+	for (z = 0; z < 16; z+=4) {
+	    int Z = z*2;
 
-// As SET1x, but read x as a 32-bit value.
-// This is used to load cmpl_freq and rcp_shift as a pair together
-#if 0
-#define SET1y(a,b,x) __m256i a##1 = _mm256_set_epi32(*(uint32_t *)&b[ 7]->x, *(uint32_t *)&b[ 6]->x, *(uint32_t *)&b[ 5]->x, *(uint32_t *)&b[ 4]->x, *(uint32_t *)&b[ 3]->x, *(uint32_t *)&b[ 2]->x, *(uint32_t *)&b[ 1]->x, *(uint32_t *)&b[ 0]->x)
-#define SET2y(a,b,x) __m256i a##2 = _mm256_set_epi32(*(uint32_t *)&b[15]->x, *(uint32_t *)&b[14]->x, *(uint32_t *)&b[13]->x, *(uint32_t *)&b[12]->x, *(uint32_t *)&b[11]->x, *(uint32_t *)&b[10]->x, *(uint32_t *)&b[ 9]->x, *(uint32_t *)&b[ 8]->x)
-#define SET3y(a,b,x) __m256i a##3 = _mm256_set_epi32(*(uint32_t *)&b[23]->x, *(uint32_t *)&b[22]->x, *(uint32_t *)&b[21]->x, *(uint32_t *)&b[20]->x, *(uint32_t *)&b[19]->x, *(uint32_t *)&b[18]->x, *(uint32_t *)&b[17]->x, *(uint32_t *)&b[16]->x)
-#define SET4y(a,b,x) __m256i a##4 = _mm256_set_epi32(*(uint32_t *)&b[31]->x, *(uint32_t *)&b[30]->x, *(uint32_t *)&b[29]->x, *(uint32_t *)&b[28]->x, *(uint32_t *)&b[27]->x, *(uint32_t *)&b[26]->x, *(uint32_t *)&b[25]->x, *(uint32_t *)&b[24]->x)
-#else
-#define SET1y(a,b,x) __m256i a##1 = _mm256_set_epi32(b[ 7]->x, b[ 6]->x, b[ 5]->x, b[ 4]->x, b[ 3]->x, b[ 2]->x, b[ 1]->x, b[ 0]->x)
-#define SET2y(a,b,x) __m256i a##2 = _mm256_set_epi32(b[15]->x, b[14]->x, b[13]->x, b[12]->x, b[11]->x, b[10]->x, b[ 9]->x, b[ 8]->x)
-#define SET3y(a,b,x) __m256i a##3 = _mm256_set_epi32(b[23]->x, b[22]->x, b[21]->x, b[20]->x, b[19]->x, b[18]->x, b[17]->x, b[16]->x)
-#define SET4y(a,b,x) __m256i a##4 = _mm256_set_epi32(b[31]->x, b[30]->x, b[29]->x, b[28]->x, b[27]->x, b[26]->x, b[25]->x, b[24]->x)
-#endif
-#define SETy(a,b,y) SET1y(a,b,y);SET2y(a,b,y);SET3y(a,b,y);SET4y(a,b,y)
+#define m128_to_256 _mm256_castsi128_si256
+	    __m256i t0, t1, t2, t3;
+	    __m128i *s0, *s1, *s2, *s3;
+	    s0 = (__m128i *)((int *)syms + 4*(256*in[iN[Z+0]] + lN[Z+0]));
+	    s1 = (__m128i *)((int *)syms + 4*(256*in[iN[Z+4]] + lN[Z+4]));
+	    s2 = (__m128i *)((int *)syms + 4*(256*in[iN[Z+1]] + lN[Z+1]));
+	    s3 = (__m128i *)((int *)syms + 4*(256*in[iN[Z+5]] + lN[Z+5]));
+	    t0 = _mm256_shuffle_epi32(m128_to_256(_mm_loadu_si128(s0)), 0xE4);
+	    t1 = _mm256_shuffle_epi32(m128_to_256(_mm_loadu_si128(s1)), 0xE4);
+	    t2 = _mm256_shuffle_epi32(m128_to_256(_mm_loadu_si128(s2)), 0x93);
+	    t3 = _mm256_shuffle_epi32(m128_to_256(_mm_loadu_si128(s3)), 0x93);
 
+	    lN[Z+0] = in[iN[Z+0]];
+	    lN[Z+4] = in[iN[Z+4]];
+	    lN[Z+1] = in[iN[Z+1]];
+	    lN[Z+5] = in[iN[Z+5]];
+
+	    sh[z+0] = _mm256_permute2x128_si256(t0, t1, 0x20);
+	    sh[z+1] = _mm256_permute2x128_si256(t2, t3, 0x20);
+
+	    s0 = (__m128i *)((int *)syms + 4*(256*in[iN[Z+2]] + lN[Z+2]));
+	    s1 = (__m128i *)((int *)syms + 4*(256*in[iN[Z+6]] + lN[Z+6]));
+	    s2 = (__m128i *)((int *)syms + 4*(256*in[iN[Z+3]] + lN[Z+3]));
+	    s3 = (__m128i *)((int *)syms + 4*(256*in[iN[Z+7]] + lN[Z+7]));
+	    t0 = _mm256_shuffle_epi32(m128_to_256(_mm_loadu_si128(s0)), 0x4E);
+	    t1 = _mm256_shuffle_epi32(m128_to_256(_mm_loadu_si128(s1)), 0x4E);
+	    t2 = _mm256_shuffle_epi32(m128_to_256(_mm_loadu_si128(s2)), 0x39);
+	    t3 = _mm256_shuffle_epi32(m128_to_256(_mm_loadu_si128(s3)), 0x39);
+
+	    lN[Z+2] = in[iN[Z+2]];
+	    lN[Z+6] = in[iN[Z+6]];
+	    lN[Z+3] = in[iN[Z+3]];
+	    lN[Z+7] = in[iN[Z+7]];
+
+	    sh[z+2] = _mm256_permute2x128_si256(t0, t1, 0x20);
+	    sh[z+3] = _mm256_permute2x128_si256(t2, t3, 0x20);
+
+	    // potential to set xmax, rf, bias, and SD in-situ here, removing
+	    // the need to hold sh[] in regs.  Doing so doesn't seem to speed
+	    // things up though.
+	}
+
+	__m256i xA = _mm256_set_epi32(0,0,0,-1, 0,0,0,-1);
+	__m256i xB = _mm256_set_epi32(0,0,-1,0, 0,0,-1,0);
+	__m256i xC = _mm256_set_epi32(0,-1,0,0, 0,-1,0,0);
+	__m256i xD = _mm256_set_epi32(-1,0,0,0, -1,0,0,0);
+
+	// Extract 32-bit xmax elements from syms[] data (in sh vec array)
+//#define SYM_LOAD(x, A, B, C, D)						\
+//	_mm256_or_si256(_mm256_or_si256(_mm256_and_si256(sh[x+0], A),	\
+//					_mm256_and_si256(sh[x+1], B)),	\
+//  	                _mm256_or_si256(_mm256_and_si256(sh[x+2], C),	\
+//			                _mm256_and_si256(sh[x+3], D)))
+	__m256i xmax1 = SYM_LOAD( 0, xA, xB, xC, xD);
+	__m256i xmax2 = SYM_LOAD( 4, xA, xB, xC, xD);
+	__m256i xmax3 = SYM_LOAD( 8, xA, xB, xC, xD);
+	__m256i xmax4 = SYM_LOAD(12, xA, xB, xC, xD);
 
 	// ------------------------------------------------------------
 	//	for (z = NX-1; z >= 0; z--) {
@@ -799,8 +934,6 @@ unsigned char *rans_compress_O1_32x16_avx2(unsigned char *in, unsigned int in_si
 	//		ransN[z] >>= 16;
 	//	    }
 	//	}
-	//LOAD(xmax,x_max);
-	SETx(xmax, sN, x_max);
         __m256i cv1 = _mm256_cmpgt_epi32(Rv1, xmax1);
         __m256i cv2 = _mm256_cmpgt_epi32(Rv2, xmax2);
         __m256i cv3 = _mm256_cmpgt_epi32(Rv3, xmax3);
@@ -839,6 +972,11 @@ unsigned char *rans_compress_O1_32x16_avx2(unsigned char *in, unsigned int in_si
         // It's BAba order, want BbAa so shuffle.
         V12 = _mm256_permute4x64_epi64(V12, 0xd8);
         V34 = _mm256_permute4x64_epi64(V34, 0xd8);
+
+	// Load rcp_freq ready for later
+	__m256i rfv1 = _mm256_shuffle_epi32(SYM_LOAD( 0, xB, xC, xD, xA),0x39);
+	__m256i rfv2 = _mm256_shuffle_epi32(SYM_LOAD( 4, xB, xC, xD, xA),0x39);
+
         // Now we have bottom N 16-bit values in each V12/V34 to flush
         __m128i f =  _mm256_extractf128_si256(V34, 1);
         _mm_storeu_si128((__m128i *)(ptr16-8), f);
@@ -856,11 +994,19 @@ unsigned char *rans_compress_O1_32x16_avx2(unsigned char *in, unsigned int in_si
         _mm_storeu_si128((__m128i *)(ptr16-8), f);
         ptr16 -= _mm_popcnt_u32(imask1);
 
-        __m256i Rs;
-        Rs = _mm256_srli_epi32(Rv1,16); Rv1 = _mm256_blendv_epi8(Rv1, Rs, cv1);
-        Rs = _mm256_srli_epi32(Rv2,16); Rv2 = _mm256_blendv_epi8(Rv2, Rs, cv2);
-        Rs = _mm256_srli_epi32(Rv3,16); Rv3 = _mm256_blendv_epi8(Rv3, Rs, cv3);
-        Rs = _mm256_srli_epi32(Rv4,16); Rv4 = _mm256_blendv_epi8(Rv4, Rs, cv4);
+	__m256i rfv3 = _mm256_shuffle_epi32(SYM_LOAD( 8, xB, xC, xD, xA),0x39);
+	__m256i rfv4 = _mm256_shuffle_epi32(SYM_LOAD(12, xB, xC, xD, xA),0x39);
+
+        __m256i Rs1, Rs2, Rs3, Rs4;
+        Rs1 = _mm256_srli_epi32(Rv1,16);
+        Rs2 = _mm256_srli_epi32(Rv2,16);
+        Rs3 = _mm256_srli_epi32(Rv3,16);
+        Rs4 = _mm256_srli_epi32(Rv4,16);
+
+	Rv1 = _mm256_blendv_epi8(Rv1, Rs1, cv1);
+	Rv2 = _mm256_blendv_epi8(Rv2, Rs2, cv2);
+	Rv3 = _mm256_blendv_epi8(Rv3, Rs3, cv3);
+	Rv4 = _mm256_blendv_epi8(Rv4, Rs4, cv4);
 
 	// ------------------------------------------------------------
 	// uint32_t q = (uint32_t) (((uint64_t)ransN[z] *
@@ -874,18 +1020,26 @@ unsigned char *rans_compress_O1_32x16_avx2(unsigned char *in, unsigned int in_si
         // (AVX512 allows us to hold it all in 64-bit lanes and use mullo_epi64
         // plus a shift.  KNC has mulhi_epi32, but not sure if this is
 	// available.)
-	SETx(rfv, sN, rcp_freq);
-
         rfv1 = _mm256_mulhi_epu32(Rv1, rfv1);
         rfv2 = _mm256_mulhi_epu32(Rv2, rfv2);
         rfv3 = _mm256_mulhi_epu32(Rv3, rfv3);
         rfv4 = _mm256_mulhi_epu32(Rv4, rfv4);
 
-	//SETx(SDv, sN, SD); // where SD is cmp_freq | (rcp_shift<<16)
-	SETy(SDv, sN, cmpl_freq);
+	// Load cmpl_freq / rcp_shift from syms
+	__m256i SDv1 = _mm256_shuffle_epi32(SYM_LOAD( 0, xD, xA, xB, xC),0x93);
+	__m256i SDv2 = _mm256_shuffle_epi32(SYM_LOAD( 4, xD, xA, xB, xC),0x93);
+	// Load bias from syms[]
+	__m256i biasv1=_mm256_shuffle_epi32(SYM_LOAD( 0, xC, xD, xA, xB),0x4E);
+	__m256i biasv2=_mm256_shuffle_epi32(SYM_LOAD( 4, xC, xD, xA, xB),0x4E);
 
         __m256i shiftv1 = _mm256_srli_epi32(SDv1, 16);
         __m256i shiftv2 = _mm256_srli_epi32(SDv2, 16);
+
+	__m256i SDv3 = _mm256_shuffle_epi32(SYM_LOAD( 8, xD, xA, xB, xC),0x93);
+	__m256i SDv4 = _mm256_shuffle_epi32(SYM_LOAD(12, xD, xA, xB, xC),0x93);
+	__m256i biasv3=_mm256_shuffle_epi32(SYM_LOAD( 8, xC, xD, xA, xB),0x4E);
+	__m256i biasv4=_mm256_shuffle_epi32(SYM_LOAD(12, xC, xD, xA, xB),0x4E);
+
         __m256i shiftv3 = _mm256_srli_epi32(SDv3, 16);
         __m256i shiftv4 = _mm256_srli_epi32(SDv4, 16);
 
@@ -910,22 +1064,18 @@ unsigned char *rans_compress_O1_32x16_avx2(unsigned char *in, unsigned int in_si
         qv3 = _mm256_mullo_epi32(qv3, freqv3);
         qv4 = _mm256_mullo_epi32(qv4, freqv4);
 
-	SETx(biasv, sN, bias);
-
         qv1 = _mm256_add_epi32(qv1, biasv1);
 	qv2 = _mm256_add_epi32(qv2, biasv2);
         qv3 = _mm256_add_epi32(qv3, biasv3);
         qv4 = _mm256_add_epi32(qv4, biasv4);
 
+	for (z = 0; z < NX; z++)
+	    iN[z]--;
+
 	Rv1 = _mm256_add_epi32(Rv1, qv1);
         Rv2 = _mm256_add_epi32(Rv2, qv2);
         Rv3 = _mm256_add_epi32(Rv3, qv3);
         Rv4 = _mm256_add_epi32(Rv4, qv4);
-
-	for (z = 0; z < NX; z++) {
-	    lN[z] = c[z];
-	    iN[z]--;
-	}
     }
 
     STORE(Rv, ransN);
