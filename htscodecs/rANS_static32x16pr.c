@@ -194,6 +194,9 @@ unsigned char *rans_compress_O0_32x16(unsigned char *in,
       RansEncPutSymbol(&ransN[z], &ptr, &syms[in[in_size-(i-z)]]);
 
     if (low_ent) {
+	// orig
+	// gcc   446
+	// clang 427
 	for (i=(in_size &~(NX-1)); i>0; i-=NX) {
 	    for (z = NX-1; z >= 0; z-=4) {
 		RansEncSymbol *s0 = &syms[in[i-(NX-z+0)]];
@@ -219,6 +222,41 @@ unsigned char *rans_compress_O0_32x16(unsigned char *in,
 	    if (z < -1) abort();
 	}
     } else {
+	// Branchless version optimises poorly with gcc unless we have
+	// AVX2 capability, so have a custom rewrite of it.
+	// Gcc11:   322 MB/s (this) vs 208 MB/s (other)
+	// Clang10: 305 MB/s (this) vs 340 MB/s (other)
+#if defined(__GNUC__) && !defined(__clang__)
+	uint16_t* ptr16 = (uint16_t *)ptr;
+	for (i=(in_size &~(NX-1)); i>0; i-=NX) {
+	    for (z = NX-1; z >= 0; z-=4) {
+		RansEncSymbol *sy[4];
+		int k;
+
+		// RansEncPutSymbol added in-situ
+		for (k = 0; k < 4; k++) {
+		    sy[k] = &syms[in[i-(NX-z+k)]];
+		    int c  = ransN[z-k] > sy[k]->x_max;
+#ifdef HTSCODECS_LITTLE_ENDIAN
+		    ptr16[-1] = ransN[z-k];
+#else
+		    ((uint8_t *)&ptr16[-1])[0] = ransN[z-k];
+		    ((uint8_t *)&ptr16[-1])[1] = ransN[z-k]>>8;
+#endif
+		    ptr16 -= c;
+		    ransN[z-k] >>= c<<4;
+		}
+
+		for (k = 0; k < 4; k++) {
+		    uint64_t r64 = (uint64_t)ransN[z-k];
+		    uint32_t q = (r64 * sy[k]->rcp_freq) >> sy[k]->rcp_shift;
+		    ransN[z-k] += sy[k]->bias + q*sy[k]->cmpl_freq;
+		}
+	    }
+	    if (z < -1) abort();
+	}
+	ptr = (uint8_t *)ptr16;
+#else
 	for (i=(in_size &~(NX-1)); i>0; i-=NX) {
 	    for (z = NX-1; z >= 0; z-=4) {
 		RansEncSymbol *s0 = &syms[in[i-(NX-z+0)]];
@@ -243,6 +281,7 @@ unsigned char *rans_compress_O0_32x16(unsigned char *in,
 	    }
 	    if (z < -1) abort();
 	}
+#endif
     }
     for (z = NX-1; z >= 0; z--)
       RansEncFlush(&ransN[z], &ptr);
@@ -554,27 +593,41 @@ unsigned char *rans_compress_O1_32x16(unsigned char *in,
 	lN[z] = c;
     }
 
-    for (; iN[0] >= 0; ) {
+    unsigned char *i32[NX];
+    for (i = 0; i < NX; i++)
+	i32[i] = &in[iN[i]];
+
+    for (; i32[0] >= in; ) {
+	uint16_t *ptr16 = (uint16_t *)ptr;
 	for (z = NX-1; z >= 0; z-=4) {
-	    unsigned char c0;
-	    unsigned char c1;
-	    unsigned char c2;
-	    unsigned char c3;
+	    RansEncSymbol *sy[4];
+	    int k;
 
-	    RansEncSymbol *s0 = &syms[c0 = in[iN[z-0]--]][lN[z-0]];
-	    lN[z-0] = c0;
-	    RansEncSymbol *s1 = &syms[c1 = in[iN[z-1]--]][lN[z-1]];
-	    lN[z-1] = c1;
-	    RansEncSymbol *s2 = &syms[c2 = in[iN[z-2]--]][lN[z-2]];
-	    lN[z-2] = c2;
-	    RansEncSymbol *s3 = &syms[c3 = in[iN[z-3]--]][lN[z-3]];
-	    lN[z-3] = c3;
+	    for (k = 0; k < 4; k++) {
+		sy[k] = &syms[*i32[z-k]][lN[z-k]];
+		lN[z-k] = *i32[z-k]--;
+	    }
 
-	    RansEncPutSymbol(&ransN[z-0], &ptr, s0);
-	    RansEncPutSymbol(&ransN[z-1], &ptr, s1);
-	    RansEncPutSymbol(&ransN[z-2], &ptr, s2);
-	    RansEncPutSymbol(&ransN[z-3], &ptr, s3);
+	    // RansEncPutSymbol added in-situ
+	    for (k = 0; k < 4; k++) {
+		int c = ransN[z-k] > sy[k]->x_max;
+#ifdef HTSCODECS_LITTLE_ENDIAN
+		ptr16[-1] = ransN[z-k];
+#else
+		((uint8_t *)&ptr16[-1])[0] = ransN[z-k];
+		((uint8_t *)&ptr16[-1])[1] = ransN[z-k]>>8;
+#endif
+		ptr16 -= c;
+		ransN[z-k] >>= c<<4;
+	    }
+
+	    for (k = 0; k < 4; k++) {
+		uint64_t r64 = ransN[z-k];
+		uint32_t q = (r64 * sy[k]->rcp_freq) >> sy[k]->rcp_shift;
+		ransN[z-k] += sy[k]->bias + q*sy[k]->cmpl_freq;
+	    }
 	}
+	ptr = (uint8_t *)ptr16;
     }
 
     for (z = NX-1; z>=0; z--)
