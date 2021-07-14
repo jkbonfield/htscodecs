@@ -212,8 +212,6 @@ unsigned char *rans_compress_O0_32x16_avx2(unsigned char *in,
     LOAD(Rv, ransN);
 
     for (i=(in_size &~(NX-1)); i>0; i-=NX) {
-	uint8_t *c = &in[i-NX];
-
 	// We need to gather sym[curr_char][last_char] structs.
 	// These hold 4 32-bit values, so are 128 bit each, and
 	// are loaded from 32 distinct addresses.
@@ -922,11 +920,13 @@ unsigned char *rans_compress_O1_32x16_avx2(unsigned char *in, unsigned int in_si
 	__m256i xD = _mm256_set_epi32(-1,0,0,0, -1,0,0,0);
 
 	// Extract 32-bit xmax elements from syms[] data (in sh vec array)
-//#define SYM_LOAD(x, A, B, C, D)						\
-//	_mm256_or_si256(_mm256_or_si256(_mm256_and_si256(sh[x+0], A),	\
-//					_mm256_and_si256(sh[x+1], B)),	\
-//  	                _mm256_or_si256(_mm256_and_si256(sh[x+2], C),	\
-//			                _mm256_and_si256(sh[x+3], D)))
+/*
+#define SYM_LOAD(x, A, B, C, D)						\
+	_mm256_or_si256(_mm256_or_si256(_mm256_and_si256(sh[x+0], A),	\
+					_mm256_and_si256(sh[x+1], B)),	\
+  	                _mm256_or_si256(_mm256_and_si256(sh[x+2], C),	\
+			                _mm256_and_si256(sh[x+3], D)))
+*/
 	__m256i xmax1 = SYM_LOAD( 0, xA, xB, xC, xD);
 	__m256i xmax2 = SYM_LOAD( 4, xA, xB, xC, xD);
 	__m256i xmax3 = SYM_LOAD( 8, xA, xB, xC, xD);
