@@ -1002,7 +1002,7 @@ unsigned char *(*rans_enc_func(int do_simd, int order))
 		: (have_avx2
 		   ? rans_compress_O0_32x16_avx2
 		   : (have_sse4_1
-		      ? rans_compress_O0_32x16
+		      ? rans_compress_O0_32x16//_sse4
 		      : rans_compress_O0_32x16));
 	}
     }

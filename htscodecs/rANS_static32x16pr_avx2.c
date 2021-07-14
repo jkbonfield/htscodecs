@@ -99,6 +99,8 @@ static __m256i _mm256_mulhi_epu32(__m256i a, __m256i b) {
     b = _mm256_srli_epi64(b, 32);
 
     __m256i ab_hm = _mm256_mul_epu32(a, b);
+
+    //return _mm256_blend_epi32(ab_lm, ab_hm, 0xaa);
     ab_hm = _mm256_and_si256(ab_hm,
 			 _mm256_set1_epi64x((uint64_t)0xffffffff00000000));
     ab_hm = _mm256_or_si256(ab_hm, ab_lm);
@@ -106,17 +108,19 @@ static __m256i _mm256_mulhi_epu32(__m256i a, __m256i b) {
     return ab_hm;
 }
 #else
-static __m256i _mm256_mulhi_epu32(__m256i a, __m256i b) {
+static inline __m256i _mm256_mulhi_epu32(__m256i a, __m256i b) {
     // Multiply bottom 4 items and top 4 items together.
     __m256i ab_hm = _mm256_mul_epu32(_mm256_srli_epi64(a, 32),
 				     _mm256_srli_epi64(b, 32));
     __m256i ab_lm = _mm256_srli_epi64(_mm256_mul_epu32(a, b), 32);
 
-    // Shift to get hi 32-bit of each 64-bit product
-    ab_hm = _mm256_and_si256(ab_hm,
-			 _mm256_set1_epi64x((uint64_t)0xffffffff00000000));
-
-    return _mm256_or_si256(ab_lm, ab_hm);
+    return _mm256_blend_epi32(ab_lm, ab_hm, 0xaa);
+//
+//    // Shift to get hi 32-bit of each 64-bit product
+//    ab_hm = _mm256_and_si256(ab_hm,
+//			 _mm256_set1_epi64x((uint64_t)0xffffffff00000000));
+//
+//    return _mm256_or_si256(ab_lm, ab_hm);
 }
 #endif
 
@@ -217,7 +221,7 @@ unsigned char *rans_compress_O0_32x16_avx2(unsigned char *in,
 	// We load them into 32 128-bit lanes and then combine to get
 	// 16 avx-256 registers.
 	// These are now ABCD ABCD ABCD ABCD... orientation
-	// Code we can then "gather" from these registers via a combination
+	// We can then "gather" from these registers via a combination
 	// of shuffle / permutes / and / or operations.  This is less
 	// IO than repeating 4 sets of gathers/loads 32-times over.
 
@@ -251,6 +255,7 @@ unsigned char *rans_compress_O0_32x16_avx2(unsigned char *in,
 	    s1 = (__m128i *)((int *)syms + 4*in[Z+4]);
 	    s2 = (__m128i *)((int *)syms + 4*in[Z+1]);
 	    s3 = (__m128i *)((int *)syms + 4*in[Z+5]);
+	    // FIXME: try load instead of loadu, as 128-bit aligned.
 	    t0 = _mm256_shuffle_epi32(m128_to_256(_mm_loadu_si128(s0)), 0xE4);
 	    t1 = _mm256_shuffle_epi32(m128_to_256(_mm_loadu_si128(s1)), 0xE4);
 	    t2 = _mm256_shuffle_epi32(m128_to_256(_mm_loadu_si128(s2)), 0x93);

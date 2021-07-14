@@ -80,49 +80,6 @@ extern void rans_tls_init(void);
 
 #define NX 32
 
-// Hist8 with a crude entropy (bits / byte) estimator.
-static inline
-double hist8e(unsigned char *in, unsigned int in_size, uint32_t F0[256]) {
-    uint32_t F1[256+MAGIC] = {0}, F2[256+MAGIC] = {0}, F3[256+MAGIC] = {0};
-    uint32_t F4[256+MAGIC] = {0}, F5[256+MAGIC] = {0}, F6[256+MAGIC] = {0};
-    uint32_t F7[256+MAGIC] = {0};
-
-#ifdef __GNUC__
-    double e = 0, in_size_r2 = log(1.0/in_size)/log(2);
-#else
-    double e = 0, in_size_r2 = log(1.0/in_size);
-#endif
-
-    unsigned int i, i8 = in_size & ~7;
-    for (i = 0; i < i8; i+=8) {
-	F0[in[i+0]]++;
-	F1[in[i+1]]++;
-	F2[in[i+2]]++;
-	F3[in[i+3]]++;
-	F4[in[i+4]]++;
-	F5[in[i+5]]++;
-	F6[in[i+6]]++;
-	F7[in[i+7]]++;
-    }
-    while (i < in_size)
-	F0[in[i++]]++;
-
-    for (i = 0; i < 256; i++) {
-	F0[i] += F1[i] + F2[i] + F3[i] + F4[i] + F5[i] + F6[i] + F7[i];
-#ifdef __GNUC__
-	e -= F0[i] * (32 - __builtin_clz(F0[i]) + in_size_r2);
-#else
-	extern double fast_log(double);
-	e -= F0[i] * (fast_log(F0[i]) + in_size_r2);
-#endif
-    }
-
-#ifndef __GNUC__
-    e /= log(2);
-#endif
-    return e/in_size;
-}
-
 #ifdef __ARM_NEON
 #  include "rANS_static32x16pr_neon.c"
 #endif
@@ -223,78 +180,89 @@ unsigned char *rans_compress_O0_32x16(unsigned char *in,
 	}
     } else {
 	// Branchless version optimises poorly with gcc unless we have
-	// AVX2 capability, so have a custom rewrite of it.
-	// Gcc11:   322 MB/s (this) vs 208 MB/s (other)
-	// Clang10: 305 MB/s (this) vs 340 MB/s (other)
-#if defined(__GNUC__) && !defined(__clang__)
+ 	// AVX2 capability, so have a custom rewrite of it.
 	uint16_t* ptr16 = (uint16_t *)ptr;
 	for (i=(in_size &~(NX-1)); i>0; i-=NX) {
+	    // Unrolled copy of below, because gcc doesn't optimise this
+	    // well in the original form.
+	    //
+	    // Gcc11:   328 MB/s (this) vs 208 MB/s (orig)
+	    // Clang10: 352 MB/s (this) vs 340 MB/s (orig)
+	    //
+	    // for (z = NX-1; z >= 0; z-=4) {
+	    // 	RansEncSymbol *s0 = &syms[in[i-(NX-z+0)]];
+	    // 	RansEncSymbol *s1 = &syms[in[i-(NX-z+1)]];
+	    // 	RansEncSymbol *s2 = &syms[in[i-(NX-z+2)]];
+	    // 	RansEncSymbol *s3 = &syms[in[i-(NX-z+3)]];
+	    // 	RansEncPutSymbol(&ransN[z-0], &ptr, s0);
+	    // 	RansEncPutSymbol(&ransN[z-1], &ptr, s1);
+	    // 	RansEncPutSymbol(&ransN[z-2], &ptr, s2);
+	    // 	RansEncPutSymbol(&ransN[z-3], &ptr, s3);
+	    // }
+
 	    for (z = NX-1; z >= 0; z-=4) {
-		RansEncSymbol *sy[4];
-		int k;
-
 		// RansEncPutSymbol added in-situ
-		for (k = 0; k < 4; k++) {
-		    sy[k] = &syms[in[i-(NX-z+k)]];
-		    int c  = ransN[z-k] > sy[k]->x_max;
-#ifdef HTSCODECS_LITTLE_ENDIAN
-		    ptr16[-1] = ransN[z-k];
-#else
-		    ((uint8_t *)&ptr16[-1])[0] = ransN[z-k];
-		    ((uint8_t *)&ptr16[-1])[1] = ransN[z-k]>>8;
-#endif
-		    ptr16 -= c;
-		    ransN[z-k] >>= c<<4;
-		}
+		RansState *rp = &ransN[z]-3;
+		RansEncSymbol *sy[4];
+		uint8_t *C = &in[i-(NX-z)]-3;
 
+		sy[0] = &syms[C[3]];
+		sy[1] = &syms[C[2]];
+
+		int c0  = rp[3-0] > sy[0]->x_max;
+		int c1  = rp[3-1] > sy[1]->x_max;
+
+#ifdef HTSCODECS_LITTLE_ENDIAN
+		ptr16[-1] = rp[3-0]; ptr16 -= c0;
+		ptr16[-1] = rp[3-1]; ptr16 -= c1;
+#else
+		((uint8_t *)&ptr16[-1])[0] = rp[3-0];
+		((uint8_t *)&ptr16[-1])[1] = rp[3-0]>>8;
+		ptr16 -= c0;
+		((uint8_t *)&ptr16[-1])[0] = rp[3-1];
+		((uint8_t *)&ptr16[-1])[1] = rp[3-1]>>8;
+		ptr16 -= c1;
+#endif
+
+		rp[3-0] >>= c0<<4;
+		rp[3-1] >>= c1<<4;
+
+		sy[2] = &syms[C[1]];
+		sy[3] = &syms[C[0]];
+
+		int c2  = rp[3-2] > sy[2]->x_max;
+		int c3  = rp[3-3] > sy[3]->x_max;
+#ifdef HTSCODECS_LITTLE_ENDIAN
+		ptr16[-1] = rp[3-2]; ptr16 -= c2;
+		ptr16[-1] = rp[3-3]; ptr16 -= c3;
+#else
+		((uint8_t *)&ptr16[-1])[0] = rp[3-0];
+		((uint8_t *)&ptr16[-1])[1] = rp[3-0]>>8;
+		ptr16 -= c2;
+		((uint8_t *)&ptr16[-1])[0] = rp[3-1];
+		((uint8_t *)&ptr16[-1])[1] = rp[3-1]>>8;
+		ptr16 -= c3;
+#endif
+		rp[3-2] >>= c2<<4;
+		rp[3-3] >>= c3<<4;
+
+		int k;
 		for (k = 0; k < 4; k++) {
-		    uint64_t r64 = (uint64_t)ransN[z-k];
+		    uint64_t r64 = (uint64_t)rp[3-k];
 		    uint32_t q = (r64 * sy[k]->rcp_freq) >> sy[k]->rcp_shift;
-		    ransN[z-k] += sy[k]->bias + q*sy[k]->cmpl_freq;
+		    rp[3-k] += sy[k]->bias + q*sy[k]->cmpl_freq;
 		}
 	    }
 	    if (z < -1) abort();
 	}
 	ptr = (uint8_t *)ptr16;
-#else
-	for (i=(in_size &~(NX-1)); i>0; i-=NX) {
-	    for (z = NX-1; z >= 0; z-=4) {
-		RansEncSymbol *s0 = &syms[in[i-(NX-z+0)]];
-		RansEncSymbol *s1 = &syms[in[i-(NX-z+1)]];
-		RansEncSymbol *s2 = &syms[in[i-(NX-z+2)]];
-		RansEncSymbol *s3 = &syms[in[i-(NX-z+3)]];
-		RansEncPutSymbol(&ransN[z-0], &ptr, s0);
-		RansEncPutSymbol(&ransN[z-1], &ptr, s1);
-		RansEncPutSymbol(&ransN[z-2], &ptr, s2);
-		RansEncPutSymbol(&ransN[z-3], &ptr, s3);
-		if (NX%8 == 0) {
-		    z -= 4;
-		    RansEncSymbol *s0 = &syms[in[i-(NX-z+0)]];
-		    RansEncSymbol *s1 = &syms[in[i-(NX-z+1)]];
-		    RansEncSymbol *s2 = &syms[in[i-(NX-z+2)]];
-		    RansEncSymbol *s3 = &syms[in[i-(NX-z+3)]];
-		    RansEncPutSymbol(&ransN[z-0], &ptr, s0);
-		    RansEncPutSymbol(&ransN[z-1], &ptr, s1);
-		    RansEncPutSymbol(&ransN[z-2], &ptr, s2);
-		    RansEncPutSymbol(&ransN[z-3], &ptr, s3);
-		}
-	    }
-	    if (z < -1) abort();
-	}
-#endif
     }
     for (z = NX-1; z >= 0; z--)
-      RansEncFlush(&ransN[z], &ptr);
+	RansEncFlush(&ransN[z], &ptr);
 
  empty:
     // Finalise block size and return it
     *out_size = (out_end - ptr) + tab_size;
-
-//    cp = out;
-//    *cp++ = (in_size>> 0) & 0xff;
-//    *cp++ = (in_size>> 8) & 0xff;
-//    *cp++ = (in_size>>16) & 0xff;
-//    *cp++ = (in_size>>24) & 0xff;
 
     memmove(out + tab_size, ptr, out_end-ptr);
 
