@@ -66,11 +66,13 @@ SSE2:
     _mm_load_si128 _mm_store_si128
     _mm_set_epi32  _mm_set1_epi32
     _mm_and_si128  _mm_or_si128
-    _mm_srli_epi32 _mm_slli_epi32
+    _mm_srli_epi32 _mm_slli_epi32 _mm_srli_epi64 _mm_set1_epi64x
     _mm_add_epi32
     _mm_packus_epi32
     _mm_andnot_si128
     _mm_cmpeq_epi32
+    _mm_mul_epu32
+    _mm_shuffle_epi32
 
 SSSE3:
     _mm_shuffle_epi8
@@ -114,6 +116,359 @@ static inline __m128i _mm_i32gather_epi32x(int *b, __m128i idx, int size) {
     _mm_store_si128((__m128i *)c, idx);
     return _mm_set_epi32(b[c[3]], b[c[2]], b[c[1]], b[c[0]]);
 }
+
+// SSE4 implementation of the Order-0 encoder is poorly performing.
+// Disabled for now.
+#if 0
+#define LOAD128v(a,b)					\
+    __m128i a[8];					\
+    a[0] = _mm_load_si128((__m128i *)&b[0]);		\
+    a[1] = _mm_load_si128((__m128i *)&b[4]);		\
+    a[2] = _mm_load_si128((__m128i *)&b[8]);		\
+    a[3] = _mm_load_si128((__m128i *)&b[12]);		\
+    a[4] = _mm_load_si128((__m128i *)&b[16]);		\
+    a[5] = _mm_load_si128((__m128i *)&b[20]);		\
+    a[6] = _mm_load_si128((__m128i *)&b[24]);		\
+    a[7] = _mm_load_si128((__m128i *)&b[28]);
+
+#define STORE128v(a,b)					\
+    _mm_store_si128((__m128i *)&b[ 0], a[0]);		\
+    _mm_store_si128((__m128i *)&b[ 4], a[1]);		\
+    _mm_store_si128((__m128i *)&b[ 8], a[2]);		\
+    _mm_store_si128((__m128i *)&b[12], a[3]);		\
+    _mm_store_si128((__m128i *)&b[16], a[4]);		\
+    _mm_store_si128((__m128i *)&b[20], a[5]);		\
+    _mm_store_si128((__m128i *)&b[24], a[6]);		\
+    _mm_store_si128((__m128i *)&b[28], a[7]);
+
+static inline __m128i _mm_mulhi_epu32(__m128i a, __m128i b) {
+    // Multiply bottom 4 items and top 4 items together.
+    __m128i ab_hm = _mm_mul_epu32(_mm_srli_epi64(a, 32),_mm_srli_epi64(b, 32));
+    __m128i ab_lm = _mm_srli_epi64(_mm_mul_epu32(a, b), 32);
+
+    // Blend or and/or seems to make no difference.
+    return _mm_blend_epi16(ab_lm, ab_hm, 0xcc);
+
+//    // Shift to get hi 32-bit of each 64-bit product
+//    ab_hm = _mm_and_si128(ab_hm,_mm_set1_epi64x((uint64_t)0xffffffff00000000));
+//
+//    return _mm_or_si128(ab_lm, ab_hm);
+}
+
+// Shift A>>B for non-constant B exists in AVX2, but not SSE world.
+// We simulate this for now by store, shift, and load.  Ugly!
+static inline __m128i _mm_srlv_epi32x(__m128i a, __m128i b) {
+// Extract and inline shift.  Slowest clang, joint fastest gcc
+//    return _mm_set_epi32(_mm_extract_epi32(a,3)>>_mm_extract_epi32(b,3),
+//			 _mm_extract_epi32(a,2)>>_mm_extract_epi32(b,2),
+//			 _mm_extract_epi32(a,1)>>_mm_extract_epi32(b,1),
+//			 _mm_extract_epi32(a,0)>>_mm_extract_epi32(b,0));
+
+// Half store and inline shift; Fastest gcc, comparable to others below clang
+//    uint32_t A[4];
+//    _mm_storeu_si128((__m128i *)&A, a);
+//
+//    return _mm_set_epi32(A[3]>>_mm_extract_epi32(b,3),
+//			 A[2]>>_mm_extract_epi32(b,2),
+//			 A[1]>>_mm_extract_epi32(b,1),
+//			 A[0]>>_mm_extract_epi32(b,0));
+
+// Other half
+    uint32_t B[4];
+    _mm_storeu_si128((__m128i *)&B, b);
+    return _mm_set_epi32(_mm_extract_epi32(a,3)>>B[3],
+			 _mm_extract_epi32(a,2)>>B[2],
+			 _mm_extract_epi32(a,1)>>B[1],
+			 _mm_extract_epi32(a,0)>>B[0]);
+
+// Check if all b[] match, and constant shift if so.
+// Too costly, even on q4 where it's common for all shift to be identical.
+//    __m128i cmp = _mm_cmpeq_epi32(b, _mm_shuffle_epi32(b, 0x39));
+//    if (_mm_movemask_ps((__m128)cmp) == 15) {
+//	return _mm_srl_epi32(a, _mm_set1_epi64x(_mm_extract_epi32(b,0)));
+//	//_mm_storeu_si128((__m128i *)&B,_mm_set1_epi32(_mm_extract_epi32(b,0)));
+//    } else {
+//	uint32_t B[4];
+//	_mm_storeu_si128((__m128i *)&B, b);
+//	return _mm_set_epi32(_mm_extract_epi32(a,3)>>B[3],
+//			     _mm_extract_epi32(a,2)>>B[2],
+//			     _mm_extract_epi32(a,1)>>B[1],
+//			     _mm_extract_epi32(a,0)>>B[0]);
+//    }
+
+
+// Full store and inline shift
+//   uint32_t A[4], B[4] __attribute__((aligned(16)));
+//   _mm_storeu_si128((__m128i *)&A, a);
+//   _mm_storeu_si128((__m128i *)&B, b);
+//
+//   return _mm_set_epi32(A[3]>>B[3], A[2]>>B[2], A[1]>>B[1], A[0]>>B[0]);
+
+// Full store, shift and load
+//    uint32_t A[4], B[4] __attribute__((aligned(16)));
+//    _mm_storeu_si128((__m128i *)&A, a);
+//    _mm_storeu_si128((__m128i *)&B, b);
+//    A[0]>>=B[0];
+//    A[1]>>=B[1];
+//    A[2]>>=B[2];
+//    A[3]>>=B[3];
+//    return _mm_loadu_si128((__m128i *)A);
+}
+
+unsigned char *rans_compress_O0_32x16_sse4(unsigned char *in,
+					   unsigned int in_size,
+					   unsigned char *out,
+					   unsigned int *out_size) {
+    unsigned char *cp, *out_end;
+    RansEncSymbol syms[256];
+    RansState ransN[NX];
+    uint8_t* ptr;
+    uint32_t F[256+MAGIC] = {0};
+    int i, j, tab_size = 0, rle, x, z;
+    int bound = rans_compress_bound_4x16(in_size,0)-20; // -20 for order/size/meta
+
+    if (!out) {
+	*out_size = bound;
+	out = malloc(*out_size);
+    }
+    if (!out || bound > *out_size)
+	return NULL;
+
+    // If "out" isn't word aligned, tweak out_end/ptr to ensure it is.
+    // We already added more round in bound to allow for this.
+    if (((size_t)out)&1)
+	bound--;
+    ptr = out_end = out + bound;
+
+    if (in_size == 0)
+	goto empty;
+
+    // Compute statistics
+    hist8(in, in_size, F);
+    //hist8(in, in_size, F); int low_ent = 0;
+
+    // Normalise so frequences sum to power of 2
+    uint32_t fsum = in_size;
+    uint32_t max_val = round2(fsum);
+    if (max_val > TOTFREQ)
+	max_val = TOTFREQ;
+
+    if (normalise_freq(F, fsum, max_val) < 0)
+	return NULL;
+    fsum=max_val;
+
+    cp = out;
+    cp += encode_freq(cp, F);
+    tab_size = cp-out;
+    //write(2, out+4, cp-(out+4));
+
+    if (normalise_freq(F, fsum, TOTFREQ) < 0)
+	return NULL;
+
+    // Encode statistics.
+    for (x = rle = j = 0; j < 256; j++) {
+	if (F[j]) {
+	    RansEncSymbolInit(&syms[j], x, F[j], TF_SHIFT);
+	    x += F[j];
+	}
+    }
+
+    for (z = 0; z < NX; z++)
+      RansEncInit(&ransN[z]);
+
+    z = i = in_size&(NX-1);
+    while (z-- > 0)
+      RansEncPutSymbol(&ransN[z], &ptr, &syms[in[in_size-(i-z)]]);
+
+    uint32_t SB[256], SA[256], SD[256], SC[256];
+
+    // Build lookup tables for SIMD encoding
+    uint16_t *ptr16 = (uint16_t *)ptr;
+    for (i = 0; i < 256; i++) {
+        SB[i] = syms[i].x_max;
+        SA[i] = syms[i].rcp_freq;
+        SD[i] = (syms[i].cmpl_freq<<0) | (syms[i].rcp_shift<<16);
+        SC[i] = syms[i].bias;
+    }
+
+    LOAD128v(Rv, ransN);
+
+    const __m128i shuf = _mm_set_epi8(0x80, 0x80, 0x80, 0x80,
+				      0x80, 0x80, 0x80, 0x80,
+				      0x0d, 0x0c, 0x09, 0x08,
+				      0x05, 0x04, 0x01, 0x00);
+
+    // FIXME: slower!
+    // q40:  340 (scalar) vs 300 (this)
+    // q4:   430 (scalar) vs 304 (this)
+    for (i=(in_size &~(NX-1)); i>0; i-=NX) {
+      uint8_t *c = &in[i-NX];
+
+      int h;
+      // Slightly better in 4x8 instead of 2x16 cycles with clang,
+      // but the reverse with gcc.
+      //for (h=24; h >= 0; h -= 8) {
+      for (h=16; h >= 0; h -= 16) {
+	int H = h/4; // rans index
+	uint8_t *C = &in[i-NX+h];
+
+#define SET(i,a) _mm_set_epi32(a[C[i+3]],a[C[i+2]],a[C[i+1]],a[C[i+0]])
+	__m128i xmax8 = SET(12, SB);
+	__m128i xmax7 = SET( 8, SB);
+	__m128i xmax6 = SET( 4, SB);
+	__m128i xmax5 = SET( 0, SB);
+
+	__m128i cv8 = _mm_cmpgt_epi32(Rv[H+3], xmax8);
+	__m128i cv7 = _mm_cmpgt_epi32(Rv[H+2], xmax7);
+	__m128i cv6 = _mm_cmpgt_epi32(Rv[H+1], xmax6);
+	__m128i cv5 = _mm_cmpgt_epi32(Rv[H+0], xmax5);
+
+	// Store bottom 16-bits at ptr16
+	unsigned int imask8 = _mm_movemask_ps((__m128)cv8);
+	unsigned int imask7 = _mm_movemask_ps((__m128)cv7);
+	unsigned int imask6 = _mm_movemask_ps((__m128)cv6);
+	unsigned int imask5 = _mm_movemask_ps((__m128)cv5);
+
+#define X(A) 4*A,4*A+1,0x80,0x80
+#define _ 0x80,0x80,0x80,0x80
+ 	uint8_t permutec[16][16] __attribute__((aligned(16))) = {
+	    {  _ ,  _ ,  _ ,  _ },
+	    {  _ ,  _ ,  _ ,X(0)},
+	    {  _ ,  _ ,  _ ,X(1)},
+	    {  _ ,  _ ,X(0),X(1)},
+
+	    {  _ ,  _ ,  _ ,X(2)},
+	    {  _ ,  _ ,X(0),X(2)},
+	    {  _ ,  _ ,X(1),X(2)},
+	    {  _ ,X(0),X(1),X(2)},
+
+	    {  _ ,  _ ,  _ ,X(3)},
+	    {  _ ,  _ ,X(0),X(3)},
+	    {  _ ,  _ ,X(1),X(3)},
+	    {  _ ,X(0),X(1),X(3)},
+
+	    {  _ ,  _ ,X(2),X(3)},
+	    {  _ ,X(0),X(2),X(3)},
+	    {  _ ,X(1),X(2),X(3)},
+	    {X(0),X(1),X(2),X(3)},
+	};
+#undef X
+#undef _
+
+	__m128i idx8 = _mm_load_si128((__m128i *)permutec[imask8]);
+	__m128i idx7 = _mm_load_si128((__m128i *)permutec[imask7]);
+	__m128i idx6 = _mm_load_si128((__m128i *)permutec[imask6]);
+	__m128i idx5 = _mm_load_si128((__m128i *)permutec[imask5]);
+
+	// Permute; to gather together the rans states that need flushing
+	__m128i V1, V2, V3, V4, V5, V6, V7, V8;
+	V8 = _mm_shuffle_epi8(_mm_and_si128(Rv[H+3], cv8), idx8);
+	V7 = _mm_shuffle_epi8(_mm_and_si128(Rv[H+2], cv7), idx7);
+	V6 = _mm_shuffle_epi8(_mm_and_si128(Rv[H+1], cv6), idx6);
+	V5 = _mm_shuffle_epi8(_mm_and_si128(Rv[H+0], cv5), idx5);
+
+	// Shuffle alternating shorts together to collect low 16-bit
+	// elements together.  ... 9 8 5 4 1 0.
+	// Or as with avx2 code use packus instead.
+        V8 = _mm_shuffle_epi8(V8, shuf);
+        V7 = _mm_shuffle_epi8(V7, shuf);
+	V6 = _mm_shuffle_epi8(V6, shuf);
+	V5 = _mm_shuffle_epi8(V5, shuf);
+
+	_mm_storeu_si64(ptr16-4, V8); ptr16 -= _mm_popcnt_u32(imask8);
+	_mm_storeu_si64(ptr16-4, V7); ptr16 -= _mm_popcnt_u32(imask7);
+	_mm_storeu_si64(ptr16-4, V6); ptr16 -= _mm_popcnt_u32(imask6);
+	_mm_storeu_si64(ptr16-4, V5); ptr16 -= _mm_popcnt_u32(imask5);
+
+	Rv[H+3] = _mm_blendv_epi8(Rv[H+3], _mm_srli_epi32(Rv[H+3], 16), cv8);
+	Rv[H+2] = _mm_blendv_epi8(Rv[H+2], _mm_srli_epi32(Rv[H+2], 16), cv7);
+	Rv[H+1] = _mm_blendv_epi8(Rv[H+1], _mm_srli_epi32(Rv[H+1], 16), cv6);
+	Rv[H+0] = _mm_blendv_epi8(Rv[H+0], _mm_srli_epi32(Rv[H+0], 16), cv5);
+
+	// Cannot trivially replace the multiply as mulhi_epu32 doesn't
+	// exist (only mullo).
+	// However we can use _mm_mul_epu32 twice to get 64bit results
+	// (h our lanes) and shift/or to get the answer.
+	//
+	// (AVX512 allows us to hold it all in 64-bit lanes and use mullo_epi64
+	// plus a shift.  KNC has mulhi_epi32, but not sure if this is
+	// available.)
+	__m128i rfv8 = SET(12, SA);
+	__m128i rfv7 = SET( 8, SA);
+	__m128i rfv6 = SET( 4, SA);
+	__m128i rfv5 = SET( 0, SA);
+
+	rfv8 = _mm_mulhi_epu32(Rv[H+3], rfv8);
+	rfv7 = _mm_mulhi_epu32(Rv[H+2], rfv7);
+	rfv6 = _mm_mulhi_epu32(Rv[H+1], rfv6);
+	rfv5 = _mm_mulhi_epu32(Rv[H+0], rfv5);
+
+	__m128i SDv8 = SET(12, SD);
+	__m128i SDv7 = SET( 8, SD);
+	__m128i SDv6 = SET( 4, SD);
+	__m128i SDv5 = SET( 0, SD);
+
+	__m128i shiftv8 = _mm_srli_epi32(SDv8, 16);
+	__m128i shiftv7 = _mm_srli_epi32(SDv7, 16);
+	__m128i shiftv6 = _mm_srli_epi32(SDv6, 16);
+	__m128i shiftv5 = _mm_srli_epi32(SDv5, 16);
+
+	__m128i freqv8 = _mm_and_si128(SDv8, _mm_set1_epi32(0xffff));
+	__m128i freqv7 = _mm_and_si128(SDv7, _mm_set1_epi32(0xffff));
+	__m128i freqv6 = _mm_and_si128(SDv6, _mm_set1_epi32(0xffff));
+	__m128i freqv5 = _mm_and_si128(SDv5, _mm_set1_epi32(0xffff));
+
+	// Bake this into the tabel to start with?
+	shiftv8 = _mm_sub_epi32(shiftv8, _mm_set1_epi32(32));
+	shiftv7 = _mm_sub_epi32(shiftv7, _mm_set1_epi32(32));
+	shiftv6 = _mm_sub_epi32(shiftv6, _mm_set1_epi32(32));
+	shiftv5 = _mm_sub_epi32(shiftv5, _mm_set1_epi32(32));
+
+	// No way to shift by varying amounts.  Store, shift, load? Simulated
+	__m128i qv8 = _mm_srlv_epi32x(rfv8, shiftv8);
+	__m128i qv7 = _mm_srlv_epi32x(rfv7, shiftv7);
+	__m128i qv6 = _mm_srlv_epi32x(rfv6, shiftv6);
+	__m128i qv5 = _mm_srlv_epi32x(rfv5, shiftv5);
+
+	qv8 = _mm_mullo_epi32(qv8, freqv8);
+	qv7 = _mm_mullo_epi32(qv7, freqv7);
+	qv6 = _mm_mullo_epi32(qv6, freqv6);
+	qv5 = _mm_mullo_epi32(qv5, freqv5);
+
+	qv8 = _mm_add_epi32(qv8, SET(12, SC));
+	qv7 = _mm_add_epi32(qv7, SET( 8, SC));
+	qv6 = _mm_add_epi32(qv6, SET( 4, SC));
+	qv5 = _mm_add_epi32(qv5, SET( 0, SC));
+
+	Rv[H+3] = _mm_add_epi32(Rv[H+3], qv8);
+	Rv[H+2] = _mm_add_epi32(Rv[H+2], qv7);
+	Rv[H+1] = _mm_add_epi32(Rv[H+1], qv6);
+	Rv[H+0] = _mm_add_epi32(Rv[H+0], qv5);
+      }
+    }
+
+    STORE128v(Rv, ransN);
+
+    ptr = (uint8_t *)ptr16;
+
+    for (z = NX-1; z >= 0; z--)
+      RansEncFlush(&ransN[z], &ptr);
+
+ empty:
+    // Finalise block size and return it
+    *out_size = (out_end - ptr) + tab_size;
+
+//    cp = out;
+//    *cp++ = (in_size>> 0) & 0xff;
+//    *cp++ = (in_size>> 8) & 0xff;
+//    *cp++ = (in_size>>16) & 0xff;
+//    *cp++ = (in_size>>24) & 0xff;
+
+    memmove(out + tab_size, ptr, out_end-ptr);
+
+    return out;
+}
+#endif // disable SSE4 encoder
 
 unsigned char *rans_uncompress_O0_32x16_sse4(unsigned char *in,
 					     unsigned int in_size,
