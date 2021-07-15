@@ -49,6 +49,7 @@ libhtscodecs_la_SOURCES = \
 	rANS_static32x16pr_sse4.c \
 	rANS_static32x16pr_avx2.c \
 	rANS_static32x16pr_avx512.c \
+	rANS_static16_int.h \
 	permute.h \
 	tokenise_name3.c \
 	tokenise_name3.h \
