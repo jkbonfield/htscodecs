@@ -126,45 +126,34 @@ unsigned char *rans_compress_O0_32x16_neon(unsigned char *in,
       RansEncPutSymbol(&R[z], &ptr, &syms[in[in_size-(i-z)]]);
 
     for (i=(in_size &~(NX-1)); i>0; i-=NX) {
-#if 0
-	// Scalar equivalent
-	for (z = NX-1; z >= 0; z-=4) {
-	    // 327 / 272
+//	// Scalar equivalent
+//	for (z = NX-1; z >= 0; z-=4) {
+//	    // 327 / 272
+//	    RansEncSymbol *s0 = &syms[in[i-(NX-z+0)]];
+//	    RansEncSymbol *s1 = &syms[in[i-(NX-z+1)]];
+//	    RansEncSymbol *s2 = &syms[in[i-(NX-z+2)]];
+//	    RansEncSymbol *s3 = &syms[in[i-(NX-z+3)]];
+//
+//	    RansEncPutSymbol(&R[z-0], &ptr, s0);
+//	    RansEncPutSymbol(&R[z-1], &ptr, s1);
+//	    RansEncPutSymbol(&R[z-2], &ptr, s2);
+//	    RansEncPutSymbol(&R[z-3], &ptr, s3);
+//	}
+
+	// SIMD with 16-way unrolling
+	for (z = NX-1; z >= 0; z-=8) {
 	    RansEncSymbol *s0 = &syms[in[i-(NX-z+0)]];
 	    RansEncSymbol *s1 = &syms[in[i-(NX-z+1)]];
 	    RansEncSymbol *s2 = &syms[in[i-(NX-z+2)]];
 	    RansEncSymbol *s3 = &syms[in[i-(NX-z+3)]];
 
-	    RansEncPutSymbol(&R[z-0], &ptr, s0);
-	    RansEncPutSymbol(&R[z-1], &ptr, s1);
-	    RansEncPutSymbol(&R[z-2], &ptr, s2);
-	    RansEncPutSymbol(&R[z-3], &ptr, s3);
-	}
-#else
-	// SIMD with 16-way unrolling
-	for (z = NX-1; z >= 0; z-=16) {
-	    // 360MB/s
-	    RansEncSymbol *s0 = &syms[in[i-(NX-z+0)]];
-	    RansEncSymbol *s1 = &syms[in[i-(NX-z+1)]];
-	    RansEncSymbol *s2 = &syms[in[i-(NX-z+2)]];
-	    RansEncSymbol *s3 = &syms[in[i-(NX-z+3)]];
 	    RansEncSymbol *s4 = &syms[in[i-(NX-z+4)]];
 	    RansEncSymbol *s5 = &syms[in[i-(NX-z+5)]];
 	    RansEncSymbol *s6 = &syms[in[i-(NX-z+6)]];
 	    RansEncSymbol *s7 = &syms[in[i-(NX-z+7)]];
-	    RansEncSymbol *s8 = &syms[in[i-(NX-z+8)]];
-	    RansEncSymbol *s9 = &syms[in[i-(NX-z+9)]];
-	    RansEncSymbol *s10= &syms[in[i-(NX-z+10)]];
-	    RansEncSymbol *s11= &syms[in[i-(NX-z+11)]];
-	    RansEncSymbol *s12= &syms[in[i-(NX-z+12)]];
-	    RansEncSymbol *s13= &syms[in[i-(NX-z+13)]];
-	    RansEncSymbol *s14= &syms[in[i-(NX-z+14)]];
-	    RansEncSymbol *s15= &syms[in[i-(NX-z+15)]];
 
 	    uint32x4_t Rv1 = vld1q_u32(&R[z-3]);
 	    uint32x4_t Rv2 = vld1q_u32(&R[z-7]);
-	    uint32x4_t Rv3 = vld1q_u32(&R[z-11]);
-	    uint32x4_t Rv4 = vld1q_u32(&R[z-15]);
 
 	    // Sym bit sizes = 128bits
 	    // 32: x_max
@@ -172,9 +161,6 @@ unsigned char *rans_compress_O0_32x16_neon(unsigned char *in,
 	    // 32: bias
 	    // 16: cmpl_freq
 	    // 16: rcp_shift
-
-#if 1
-	    // Fastest method: 360MB/s
 
 	    // Load and shuffle around
 	    //   A <---Xmax---><---RFreq--><---Bias---><-cf-><-rs->
@@ -212,6 +198,7 @@ unsigned char *rans_compress_O0_32x16_neon(unsigned char *in,
 	    uint32x4_t B_2 = vld1q_u32((void *)s6);
 	    uint32x4_t C_2 = vld1q_u32((void *)s5);
 	    uint32x4_t D_2 = vld1q_u32((void *)s4);
+
 	    uint32x4_t A1_2 = vtrn1q_u32(A_2, B_2);
 	    uint32x4_t C1_2 = vtrn1q_u32(C_2, D_2);
 	    uint32x4_t A2_2 = vtrn2q_u32(A_2, B_2);
@@ -221,260 +208,36 @@ unsigned char *rans_compress_O0_32x16_neon(unsigned char *in,
 	    uint32x4_t Biasv2=u32_u64(vtrn2q_u64(u64_u32(A1_2),u64_u32(C1_2)));
 	    uint32x4_t RFv2  =u32_u64(vtrn1q_u64(u64_u32(A2_2),u64_u32(C2_2)));
 	    uint32x4_t FSv2  =u32_u64(vtrn2q_u64(u64_u32(A2_2),u64_u32(C2_2)));
-
-	    uint32x4_t A_3 = vld1q_u32((void *)s11);
-	    uint32x4_t B_3 = vld1q_u32((void *)s10);
-	    uint32x4_t C_3 = vld1q_u32((void *)s9);
-	    uint32x4_t D_3 = vld1q_u32((void *)s8);
-	    uint32x4_t A1_3 = vtrn1q_u32(A_3, B_3);
-	    uint32x4_t C1_3 = vtrn1q_u32(C_3, D_3);
-	    uint32x4_t A2_3 = vtrn2q_u32(A_3, B_3);
-	    uint32x4_t C2_3 = vtrn2q_u32(C_3, D_3);
-
-	    uint32x4_t Xmaxv3=u32_u64(vtrn1q_u64(u64_u32(A1_3),u64_u32(C1_3)));
-	    uint32x4_t Biasv3=u32_u64(vtrn2q_u64(u64_u32(A1_3),u64_u32(C1_3)));
-	    uint32x4_t RFv3  =u32_u64(vtrn1q_u64(u64_u32(A2_3),u64_u32(C2_3)));
-	    uint32x4_t FSv3  =u32_u64(vtrn2q_u64(u64_u32(A2_3),u64_u32(C2_3)));
-
-	    uint32x4_t A_4 = vld1q_u32((void *)s15);
-	    uint32x4_t B_4 = vld1q_u32((void *)s14);
-	    uint32x4_t C_4 = vld1q_u32((void *)s13);
-	    uint32x4_t D_4 = vld1q_u32((void *)s12);
-	    uint32x4_t A1_4 = vtrn1q_u32(A_4, B_4);
-	    uint32x4_t C1_4 = vtrn1q_u32(C_4, D_4);
-	    uint32x4_t A2_4 = vtrn2q_u32(A_4, B_4);
-	    uint32x4_t C2_4 = vtrn2q_u32(C_4, D_4);
-
-	    uint32x4_t Xmaxv4=u32_u64(vtrn1q_u64(u64_u32(A1_4),u64_u32(C1_4)));
-	    uint32x4_t Biasv4=u32_u64(vtrn2q_u64(u64_u32(A1_4),u64_u32(C1_4)));
-	    uint32x4_t RFv4  =u32_u64(vtrn1q_u64(u64_u32(A2_4),u64_u32(C2_4)));
-	    uint32x4_t FSv4  =u32_u64(vtrn2q_u64(u64_u32(A2_4),u64_u32(C2_4)));
-#elif 1
-	    // Alternative is a 32x4x4 array and vqtbl4 to select bytes
-	    // Slowest at 256MB/s
-	    uint8x16_t i1 = {
-			     0,1,2,3,
-			     16,17,18,19,
-			     32,33,34,35,
-			     48,49,50,51
-	    };
-	    uint8x16_t i2 = {
-			     4,5,6,7,
-			     20,21,22,23,
-			     36,37,38,39,
-			     52,53,54,55
-	    };
-	    uint8x16_t i3 = {
-			     8,9,10,11,
-			     24,25,26,27,
-			     40,41,42,43,
-			     56,57,58,59,
-	    };
-	    uint8x16_t i4 = {
-			     12,13,14,15,
-			     28,29,30,31,
-			     44,45,46,47,
-			     60,61,62,63,
-	    };
-
-	    uint8x16_t A_1 = vld1q_u8((void *)s3);
-	    uint8x16_t B_1 = vld1q_u8((void *)s2);
-	    uint8x16_t C_1 = vld1q_u8((void *)s1);
-	    uint8x16_t D_1 = vld1q_u8((void *)s0);
-
-	    // vqtbl4q is latency 4 cycle, throughput 2/3.
-	    uint8x16x4_t x1 = {A_1, B_1, C_1, D_1};
-	    uint32x4_t Xmaxv1 = vreinterpretq_u32_u8(vqtbl4q_u8(x1, i1));
-	    uint32x4_t RFv1   = vreinterpretq_u32_u8(vqtbl4q_u8(x1, i2));
-	    uint32x4_t Biasv1 = vreinterpretq_u32_u8(vqtbl4q_u8(x1, i3));
-	    uint32x4_t FSv1   = vreinterpretq_u32_u8(vqtbl4q_u8(x1, i4));
-
-	    uint8x16_t A_2 = vld1q_u8((void *)s7);
-	    uint8x16_t B_2 = vld1q_u8((void *)s6);
-	    uint8x16_t C_2 = vld1q_u8((void *)s5);
-	    uint8x16_t D_2 = vld1q_u8((void *)s4);
-
-	    uint8x16x4_t x2 = {A_2, B_2, C_2, D_2};
-	    uint32x4_t Xmaxv2 = vreinterpretq_u32_u8(vqtbl4q_u8(x2, i1));
-	    uint32x4_t RFv2   = vreinterpretq_u32_u8(vqtbl4q_u8(x2, i2));
-	    uint32x4_t Biasv2 = vreinterpretq_u32_u8(vqtbl4q_u8(x2, i3));
-	    uint32x4_t FSv2   = vreinterpretq_u32_u8(vqtbl4q_u8(x2, i4));
-
-	    uint8x16_t A_3 = vld1q_u8((void *)s11);
-	    uint8x16_t B_3 = vld1q_u8((void *)s10);
-	    uint8x16_t C_3 = vld1q_u8((void *)s9);
-	    uint8x16_t D_3 = vld1q_u8((void *)s8);
-
-	    uint8x16x4_t x3 = {A_3, B_3, C_3, D_3};
-	    uint32x4_t Xmaxv3 = vreinterpretq_u32_u8(vqtbl4q_u8(x3, i1));
-	    uint32x4_t RFv3   = vreinterpretq_u32_u8(vqtbl4q_u8(x3, i2));
-	    uint32x4_t Biasv3 = vreinterpretq_u32_u8(vqtbl4q_u8(x3, i3));
-	    uint32x4_t FSv3   = vreinterpretq_u32_u8(vqtbl4q_u8(x3, i4));
-
-	    uint8x16_t A_4 = vld1q_u8((void *)s15);
-	    uint8x16_t B_4 = vld1q_u8((void *)s14);
-	    uint8x16_t C_4 = vld1q_u8((void *)s13);
-	    uint8x16_t D_4 = vld1q_u8((void *)s12);
-
-	    uint8x16x4_t x4 = {A_4, B_4, C_4, D_4};
-	    uint32x4_t Xmaxv4 = vreinterpretq_u32_u8(vqtbl4q_u8(x4, i1));
-	    uint32x4_t RFv4   = vreinterpretq_u32_u8(vqtbl4q_u8(x4, i2));
-	    uint32x4_t Biasv4 = vreinterpretq_u32_u8(vqtbl4q_u8(x4, i3));
-	    uint32x4_t FSv4   = vreinterpretq_u32_u8(vqtbl4q_u8(x4, i4));
-#else
-	    // Or alternatively again, load as a single block of memory
-	    // using 4-way interleaving, which conveniently shuffles
-	    // the 4 vars out for us automatically.  However it needs
-	    // a local copy first.
-	    //
-	    // Simplest, but also slow at 292MB/s
-	    RansEncSymbol sym1[4] = {*s3, *s2, *s1, *s0};
-	    RansEncSymbol sym2[4] = {*s7, *s6, *s5, *s4};
-	    RansEncSymbol sym3[4] = {*s11,*s10,*s9, *s8};
-	    RansEncSymbol sym4[4] = {*s15,*s14,*s13,*s12};
-
-	    uint32x4x4_t z1 = vld4q_u32((void *)sym1);
-	    uint32x4x4_t z2 = vld4q_u32((void *)sym2);
-	    uint32x4x4_t z3 = vld4q_u32((void *)sym3);
-	    uint32x4x4_t z4 = vld4q_u32((void *)sym4);
-
-	    uint32x4_t Xmaxv1 = z1.val[0];
-	    uint32x4_t RFv1   = z1.val[1];
-	    uint32x4_t Biasv1 = z1.val[2];
-	    uint32x4_t FSv1   = z1.val[3];
-
-	    uint32x4_t Xmaxv2 = z2.val[0];
-	    uint32x4_t RFv2   = z2.val[1];
-	    uint32x4_t Biasv2 = z2.val[2];
-	    uint32x4_t FSv2   = z2.val[3];
-
-	    uint32x4_t Xmaxv3 = z3.val[0];
-	    uint32x4_t RFv3   = z3.val[1];
-	    uint32x4_t Biasv3 = z3.val[2];
-	    uint32x4_t FSv3   = z3.val[3];
-
-	    uint32x4_t Xmaxv4 = z4.val[0];
-	    uint32x4_t RFv4   = z4.val[1];
-	    uint32x4_t Biasv4 = z4.val[2];
-	    uint32x4_t FSv4   = z4.val[3];
-#endif
-
+	    
 	    // Turn multi R<xmax checks into a bit-field (imask)
 	    uint32x4_t Cv1 = vcgtq_u32(Rv1, Xmaxv1);
 	    uint32x4_t Cv2 = vcgtq_u32(Rv2, Xmaxv2);
-	    uint32x4_t Cv3 = vcgtq_u32(Rv3, Xmaxv3);
-	    uint32x4_t Cv4 = vcgtq_u32(Rv4, Xmaxv4);
 
 	    uint32x4_t bit = {8,4,2,1};
 	    uint32_t imask1 = vaddvq_u32(vandq_u32(Cv1, bit));
 	    uint32_t imask2 = vaddvq_u32(vandq_u32(Cv2, bit));
-	    uint32_t imask3 = vaddvq_u32(vandq_u32(Cv3, bit));
-	    uint32_t imask4 = vaddvq_u32(vandq_u32(Cv4, bit));
 
 	    // Select low 16-bits from Rv based on imask, using tbl
-            uint8x8_t norm1, norm2, norm3, norm4;
+            uint8x8_t norm1, norm2;
 	    norm1 = vqtbl1_u8(vreinterpretq_u8_u32(Rv1),vtab[imask1]);
 	    norm2 = vqtbl1_u8(vreinterpretq_u8_u32(Rv2),vtab[imask2]);
-	    norm3 = vqtbl1_u8(vreinterpretq_u8_u32(Rv3),vtab[imask3]);
-	    norm4 = vqtbl1_u8(vreinterpretq_u8_u32(Rv4),vtab[imask4]);
 
 	    static int nbits[16] = { 0,2,2,4, 2,4,4,6, 2,4,4,6, 4,6,6,8 };
 	    vst1_u8(ptr-8, norm1);   ptr -= nbits[imask1];
 	    vst1_u8(ptr-8, norm2);   ptr -= nbits[imask2];
-	    vst1_u8(ptr-8, norm3);   ptr -= nbits[imask3];
-	    vst1_u8(ptr-8, norm4);   ptr -= nbits[imask4];
 
 	    // R' = R>>16
 	    uint32x4_t Rv1_r = vshrq_n_u32(Rv1, 16);
 	    uint32x4_t Rv2_r = vshrq_n_u32(Rv2, 16);
-	    uint32x4_t Rv3_r = vshrq_n_u32(Rv3, 16);
-	    uint32x4_t Rv4_r = vshrq_n_u32(Rv4, 16);
 
 	    // Blend R and R' based on Cv.
 	    Rv1 = vbslq_u32(Cv1, Rv1_r, Rv1);
 	    Rv2 = vbslq_u32(Cv2, Rv2_r, Rv2);
-	    Rv3 = vbslq_u32(Cv3, Rv3_r, Rv3);
-	    Rv4 = vbslq_u32(Cv4, Rv4_r, Rv4);
 
 	    // R -> R' update
 	    //   q = (uint32_t) (((uint64_t)x * rcp_freq) >> rcp_shift);
 	    //   R' = R + sym->bias + q * sym->cmpl_freq;
-#if 0
-	    // Pure SIMD: 336MB/s
-	
-	    // Neon has A=B<<n and A=B>>n shifts for an immediate 'n',
-	    // but for vector N containing a multitude of 'n' lanes, it
-	    // only has A=B<<N and no A=B>>N.
-	    //
-	    // *However* bafflingly N can be negative, so the operation
-	    // is really A=B <shift> N and is poorly labelled in the API.
 
-	    // We do the multiply as widening 32,32 to 64 result.
-	    // We then also negate and widen to 64-bit so we
-	    // can shift left by -vec.
-	    // Finally covert 64x2 back to 32x2 and combine to get 32x4.
-	    //
-	    // All things considered, it's slower than the half-scalar
-	    // code.  Likely 2 lanes just isn't enough to make it worth it.
-
-	    uint64x2_t qvl1 = vmull_u32(vget_low_u32(Rv1), vget_low_u32(RFv1));
-	    uint64x2_t qvh1 = vmull_high_u32(Rv1, RFv1);
-	    uint64x2_t qvl2 = vmull_u32(vget_low_u32(Rv2), vget_low_u32(RFv2));
-	    uint64x2_t qvh2 = vmull_high_u32(Rv2, RFv2);
-
-	    int32x4_t RSv1 = vnegq_s32(vreinterpretq_s32_u32(
-				           vshrq_n_u32(FSv1, 16)));
-	    int32x4_t RSv2 = vnegq_s32(vreinterpretq_s32_u32(
-				           vshrq_n_u32(FSv2, 16)));
-
-	    uint64x2_t qvl3 = vmull_u32(vget_low_u32(Rv3), vget_low_u32(RFv3));
-	    uint64x2_t qvh3 = vmull_high_u32(Rv3, RFv3);
-	    uint64x2_t qvl4 = vmull_u32(vget_low_u32(Rv4), vget_low_u32(RFv4));
-	    uint64x2_t qvh4 = vmull_high_u32(Rv4, RFv4);
-
-	    int32x4_t RSv3 = vnegq_s32(vreinterpretq_s32_u32(
-				           vshrq_n_u32(FSv3, 16)));
-	    int32x4_t RSv4 = vnegq_s32(vreinterpretq_s32_u32(
-				           vshrq_n_u32(FSv4, 16)));
-
-	    qvl1 = vreinterpretq_u64_s64(
-		       vshlq_s64(vreinterpretq_s64_u64(qvl1),
-				 vmovl_s32(vget_low_s32(RSv1))));
-	    qvh1 = vreinterpretq_u64_s64(
-		       vshlq_s64(vreinterpretq_s64_u64(qvh1),
-				 vmovl_s32(vget_high_s32(RSv1))));
-
-	    qvl2 = vreinterpretq_u64_s64(
-		       vshlq_s64(vreinterpretq_s64_u64(qvl2),
-				 vmovl_s32(vget_low_s32(RSv2))));
-	    qvh2 = vreinterpretq_u64_s64(
-		       vshlq_s64(vreinterpretq_s64_u64(qvh2),
-				 vmovl_s32(vget_high_s32(RSv2))));
-
-	    uint32x4_t qv1 = vcombine_u32(vmovn_u64(qvl1),
-					  vmovn_u64(qvh1));
-	    uint32x4_t qv2 = vcombine_u32(vmovn_u64(qvl2),
-					  vmovn_u64(qvh2));
-
-	    qvl3 = vreinterpretq_u64_s64(
-		       vshlq_s64(vreinterpretq_s64_u64(qvl3),
-				 vmovl_s32(vget_low_s32(RSv3))));
-	    qvh3 = vreinterpretq_u64_s64(
-		       vshlq_s64(vreinterpretq_s64_u64(qvh3),
-				 vmovl_s32(vget_high_s32(RSv3))));
-
-	    qvl4 = vreinterpretq_u64_s64(
-		       vshlq_s64(vreinterpretq_s64_u64(qvl4),
-				 vmovl_s32(vget_low_s32(RSv4))));
-	    qvh4 = vreinterpretq_u64_s64(
-		       vshlq_s64(vreinterpretq_s64_u64(qvh4),
-				 vmovl_s32(vget_high_s32(RSv4))));
-
-	    uint32x4_t qv3 = vcombine_u32(vmovn_u64(qvl3),
-					  vmovn_u64(qvh3));
-	    uint32x4_t qv4 = vcombine_u32(vmovn_u64(qvl4),
-					  vmovn_u64(qvh4));
-#elif 1
 	    // Mix SIMD (mul) & scalar (shift). 365MB/s
 
 	    // We do 32 x 32 mul to get 64-bit, but then extract this
@@ -502,93 +265,21 @@ unsigned char *rans_compress_O0_32x16_neon(unsigned char *in,
 		 vcreate_u32(vgetq_lane_u64(qvh2, 1) >> s4->rcp_shift << 32 |
 			     vgetq_lane_u64(qvh2, 0) >> s5->rcp_shift);
 
-	    uint64x2_t qvl3 = vmull_u32(vget_low_u32(Rv3), vget_low_u32(RFv3));
-	    uint64x2_t qvh3 = vmull_high_u32(Rv3, RFv3);
-
-	    uint64x2_t qvl4 = vmull_u32(vget_low_u32(Rv4), vget_low_u32(RFv4));
-	    uint64x2_t qvh4 = vmull_high_u32(Rv4, RFv4);
-
-	    uint32x2_t qv3a =
-		 vcreate_u32(vgetq_lane_u64(qvl3, 1) >> s10->rcp_shift << 32 |
-			     vgetq_lane_u64(qvl3, 0) >> s11->rcp_shift);
-	    uint32x2_t qv3b =
-		 vcreate_u32(vgetq_lane_u64(qvh3, 1) >> s8->rcp_shift << 32 |
-			     vgetq_lane_u64(qvh3, 0) >> s9->rcp_shift);
-
-	    uint32x2_t qv4a =
-		 vcreate_u32(vgetq_lane_u64(qvl4, 1) >> s14->rcp_shift << 32 |
-			     vgetq_lane_u64(qvl4, 0) >> s15->rcp_shift);
-	    uint32x2_t qv4b =
-		 vcreate_u32(vgetq_lane_u64(qvh4, 1) >> s12->rcp_shift << 32 |
-			     vgetq_lane_u64(qvh4, 0) >> s13->rcp_shift);
-
 	    uint32x4_t qv1 = vcombine_u32(qv1a, qv1b);
 	    uint32x4_t qv2 = vcombine_u32(qv2a, qv2b);
-	    uint32x4_t qv3 = vcombine_u32(qv3a, qv3b);
-	    uint32x4_t qv4 = vcombine_u32(qv4a, qv4b);
-#else
-	    // Pure scalar: 321MB/s
-	
-	    uint32_t t[16];
-	    vst1q_u32(&t[ 0], Rv1);
-	    vst1q_u32(&t[ 4], Rv2);
-	    vst1q_u32(&t[ 8], Rv3);
-	    vst1q_u32(&t[12], Rv4);
-
-	    t[0] =(uint32_t)(((uint64_t)t[0]*s3->rcp_freq) >> s3->rcp_shift);
-	    t[1] =(uint32_t)(((uint64_t)t[1]*s2->rcp_freq) >> s2->rcp_shift);
-	    t[2] =(uint32_t)(((uint64_t)t[2]*s1->rcp_freq) >> s1->rcp_shift);
-	    t[3] =(uint32_t)(((uint64_t)t[3]*s0->rcp_freq) >> s0->rcp_shift);
-
-	    t[4] =(uint32_t)(((uint64_t)t[4]*s7->rcp_freq) >> s7->rcp_shift);
-	    t[5] =(uint32_t)(((uint64_t)t[5]*s6->rcp_freq) >> s6->rcp_shift);
-	    t[6] =(uint32_t)(((uint64_t)t[6]*s5->rcp_freq) >> s5->rcp_shift);
-	    t[7] =(uint32_t)(((uint64_t)t[7]*s4->rcp_freq) >> s4->rcp_shift);
-
-	    t[ 8]=(uint32_t)(((uint64_t)t[ 8]*s11->rcp_freq)>>s11->rcp_shift);
-	    t[ 9]=(uint32_t)(((uint64_t)t[ 9]*s10->rcp_freq)>>s10->rcp_shift);
-	    t[10]=(uint32_t)(((uint64_t)t[10]*s9->rcp_freq) >> s9->rcp_shift);
-	    t[11]=(uint32_t)(((uint64_t)t[11]*s8->rcp_freq) >> s8->rcp_shift);
-
-	    t[12]=(uint32_t)(((uint64_t)t[12]*s15->rcp_freq) >>s15->rcp_shift);
-	    t[13]=(uint32_t)(((uint64_t)t[13]*s14->rcp_freq) >>s14->rcp_shift);
-	    t[14]=(uint32_t)(((uint64_t)t[14]*s13->rcp_freq) >>s13->rcp_shift);
-	    t[15]=(uint32_t)(((uint64_t)t[15]*s12->rcp_freq) >>s12->rcp_shift);
-	    uint32x4_t qv1 = vld1q_u32(t);
-	    uint32x4_t qv2 = vld1q_u32(t+4);
-	    uint32x4_t qv3 = vld1q_u32(t+8);
-	    uint32x4_t qv4 = vld1q_u32(t+12);
-/*
-#define ld32(a) vcombine_u32(vcreate_u32(((uint64_t)(a)[1])<<32 | (a)[0]), \
-			     vcreate_u32(((uint64_t)(a)[3])<<32 | (a)[2]))
-*/
-//	    uint32x4_t qv1 = ld32(&t[0]);
-//	    uint32x4_t qv2 = ld32(&t[4]);
-//	    uint32x4_t qv3 = ld32(&t[8]);
-//	    uint32x4_t qv4 = ld32(&t[12]);
-#endif
 		
             FSv1 = vandq_u32(FSv1, vdupq_n_u32(0xffff)); // cmpl_freq
             FSv2 = vandq_u32(FSv2, vdupq_n_u32(0xffff));
-            FSv3 = vandq_u32(FSv3, vdupq_n_u32(0xffff));
-            FSv4 = vandq_u32(FSv4, vdupq_n_u32(0xffff));
 	
 	    qv1 = vmlaq_u32(Biasv1, qv1, FSv1);
 	    qv2 = vmlaq_u32(Biasv2, qv2, FSv2);
-	    qv3 = vmlaq_u32(Biasv3, qv3, FSv3);
-	    qv4 = vmlaq_u32(Biasv4, qv4, FSv4);
 
 	    Rv1 = vaddq_u32(Rv1, qv1);
 	    Rv2 = vaddq_u32(Rv2, qv2);
-	    Rv3 = vaddq_u32(Rv3, qv3);
-	    Rv4 = vaddq_u32(Rv4, qv4);
 
 	    vst1q_u32(&R[z-3], Rv1);
 	    vst1q_u32(&R[z-7], Rv2);
-	    vst1q_u32(&R[z-11],Rv3);
-	    vst1q_u32(&R[z-15],Rv4);
 	}
-#endif
 	if (z < -1) abort();
     }
     for (z = NX-1; z >= 0; z--)
@@ -1359,26 +1050,16 @@ unsigned char *rans_compress_O1_32x16_neon(unsigned char *in,
 	    RansEncSymbol *s2 = &syms[c=in[iN[z- 2]--]][lN[z- 2]]; lN[z- 2]=c;
 	    RansEncSymbol *s3 = &syms[c=in[iN[z- 3]--]][lN[z- 3]]; lN[z- 3]=c;
 
-	    RansEncSymbol *s4 = &syms[c=in[iN[z- 4]--]][lN[z- 4]]; lN[z- 4]=c;
-	    RansEncSymbol *s5 = &syms[c=in[iN[z- 5]--]][lN[z- 5]]; lN[z- 5]=c;
-	    RansEncSymbol *s6 = &syms[c=in[iN[z- 6]--]][lN[z- 6]]; lN[z- 6]=c;
-	    RansEncSymbol *s7 = &syms[c=in[iN[z- 7]--]][lN[z- 7]]; lN[z- 7]=c;
-
-	    RansEncSymbol *s8 = &syms[c=in[iN[z- 8]--]][lN[z- 8]]; lN[z- 8]=c;
-	    RansEncSymbol *s9 = &syms[c=in[iN[z- 9]--]][lN[z- 9]]; lN[z- 9]=c;
-	    RansEncSymbol *s10= &syms[c=in[iN[z-10]--]][lN[z-10]]; lN[z-10]=c;
-	    RansEncSymbol *s11= &syms[c=in[iN[z-11]--]][lN[z-11]]; lN[z-11]=c;
-
-	    RansEncSymbol *s12= &syms[c=in[iN[z-12]--]][lN[z-12]]; lN[z-12]=c;
-	    RansEncSymbol *s13= &syms[c=in[iN[z-13]--]][lN[z-13]]; lN[z-13]=c;
-	    RansEncSymbol *s14= &syms[c=in[iN[z-14]--]][lN[z-14]]; lN[z-14]=c;
-	    RansEncSymbol *s15= &syms[c=in[iN[z-15]--]][lN[z-15]]; lN[z-15]=c;
-
 	    uint32x4_t Rv1 = vld1q_u32(&ransN[z-3]);
 	    uint32x4_t Rv2 = vld1q_u32(&ransN[z-7]);
 	    uint32x4_t Rv3 = vld1q_u32(&ransN[z-11]);
 	    uint32x4_t Rv4 = vld1q_u32(&ransN[z-15]);
 	
+	    RansEncSymbol *s4 = &syms[c=in[iN[z- 4]--]][lN[z- 4]]; lN[z- 4]=c;
+	    RansEncSymbol *s5 = &syms[c=in[iN[z- 5]--]][lN[z- 5]]; lN[z- 5]=c;
+	    RansEncSymbol *s6 = &syms[c=in[iN[z- 6]--]][lN[z- 6]]; lN[z- 6]=c;
+	    RansEncSymbol *s7 = &syms[c=in[iN[z- 7]--]][lN[z- 7]]; lN[z- 7]=c;
+
 	    uint32x4_t A_1 = vld1q_u32((void *)s3);
 	    uint32x4_t B_1 = vld1q_u32((void *)s2);
 	    uint32x4_t C_1 = vld1q_u32((void *)s1);
@@ -1409,15 +1090,26 @@ unsigned char *rans_compress_O1_32x16_neon(unsigned char *in,
 	    uint32x4_t FSv2  =u32_u64(vtrn2q_u64(u64_u32(A2_2),u64_u32(C2_2)));
 
 	    uint32x4_t Cv1 = vcgtq_u32(Rv1, Xmaxv1);
+	    uint32x4_t Cv2 = vcgtq_u32(Rv2, Xmaxv2);
+	    uint32x4_t bit = {8,4,2,1};
+	    uint32_t imask1 = vaddvq_u32(vandq_u32(Cv1, bit));
+	    uint32_t imask2 = vaddvq_u32(vandq_u32(Cv2, bit));
+
+	    RansEncSymbol *s8 = &syms[c=in[iN[z- 8]--]][lN[z- 8]]; lN[z- 8]=c;
+	    RansEncSymbol *s9 = &syms[c=in[iN[z- 9]--]][lN[z- 9]]; lN[z- 9]=c;
+	    RansEncSymbol *s10= &syms[c=in[iN[z-10]--]][lN[z-10]]; lN[z-10]=c;
+	    RansEncSymbol *s11= &syms[c=in[iN[z-11]--]][lN[z-11]]; lN[z-11]=c;
+
+	    RansEncSymbol *s12= &syms[c=in[iN[z-12]--]][lN[z-12]]; lN[z-12]=c;
+	    RansEncSymbol *s13= &syms[c=in[iN[z-13]--]][lN[z-13]]; lN[z-13]=c;
+	    RansEncSymbol *s14= &syms[c=in[iN[z-14]--]][lN[z-14]]; lN[z-14]=c;
+	    RansEncSymbol *s15= &syms[c=in[iN[z-15]--]][lN[z-15]]; lN[z-15]=c;
 
 	    uint32x4_t A_3 = vld1q_u32((void *)s11);
 	    uint32x4_t B_3 = vld1q_u32((void *)s10);
 	    uint32x4_t C_3 = vld1q_u32((void *)s9);
 	    uint32x4_t D_3 = vld1q_u32((void *)s8);
 
-	    uint32x4_t Cv2 = vcgtq_u32(Rv2, Xmaxv2);
-	    uint32x4_t bit = {8,4,2,1};
-	    uint32_t imask1 = vaddvq_u32(vandq_u32(Cv1, bit));
 
 	    uint32x4_t A1_3 = vtrn1q_u32(A_3, B_3);
 	    uint32x4_t C1_3 = vtrn1q_u32(C_3, D_3);
@@ -1429,20 +1121,10 @@ unsigned char *rans_compress_O1_32x16_neon(unsigned char *in,
 	    uint32x4_t RFv3  =u32_u64(vtrn1q_u64(u64_u32(A2_3),u64_u32(C2_3)));
 	    uint32x4_t FSv3  =u32_u64(vtrn2q_u64(u64_u32(A2_3),u64_u32(C2_3)));
 
-	    uint32x4_t Cv3 = vcgtq_u32(Rv3, Xmaxv3);
-	    uint32_t imask2 = vaddvq_u32(vandq_u32(Cv2, bit));
-
 	    uint32x4_t A_4 = vld1q_u32((void *)s15);
 	    uint32x4_t B_4 = vld1q_u32((void *)s14);
 	    uint32x4_t C_4 = vld1q_u32((void *)s13);
 	    uint32x4_t D_4 = vld1q_u32((void *)s12);
-
-	    uint32_t imask3 = vaddvq_u32(vandq_u32(Cv3, bit));
-	    // Select low 16-bits from Rv based on imask, using tbl
-            uint8x8_t norm1, norm2, norm3, norm4;
-	    static int nbits[16] = { 0,2,2,4, 2,4,4,6, 2,4,4,6, 4,6,6,8 };
-	    norm1 = vqtbl1_u8(vreinterpretq_u8_u32(Rv1),vtab[imask1]);
-	    norm2 = vqtbl1_u8(vreinterpretq_u8_u32(Rv2),vtab[imask2]);
 
 	    uint32x4_t A1_4 = vtrn1q_u32(A_4, B_4);
 	    uint32x4_t C1_4 = vtrn1q_u32(C_4, D_4);
@@ -1454,11 +1136,19 @@ unsigned char *rans_compress_O1_32x16_neon(unsigned char *in,
 	    uint32x4_t RFv4  =u32_u64(vtrn1q_u64(u64_u32(A2_4),u64_u32(C2_4)));
 	    uint32x4_t FSv4  =u32_u64(vtrn2q_u64(u64_u32(A2_4),u64_u32(C2_4)));
 
+	    uint32x4_t Cv3 = vcgtq_u32(Rv3, Xmaxv3);
+	    uint32x4_t Cv4 = vcgtq_u32(Rv4, Xmaxv4);
+	    uint32_t imask3 = vaddvq_u32(vandq_u32(Cv3, bit));
+	    uint32_t imask4 = vaddvq_u32(vandq_u32(Cv4, bit));
+
+	    // Select low 16-bits from Rv based on imask, using tbl
+            uint8x8_t norm1, norm2, norm3, norm4;
+	    static int nbits[16] = { 0,2,2,4, 2,4,4,6, 2,4,4,6, 4,6,6,8 };
+	    norm1 = vqtbl1_u8(vreinterpretq_u8_u32(Rv1),vtab[imask1]);
+	    norm2 = vqtbl1_u8(vreinterpretq_u8_u32(Rv2),vtab[imask2]);
+
 	    vst1_u8(ptr-8, norm1);   ptr -= nbits[imask1];
 	    vst1_u8(ptr-8, norm2);   ptr -= nbits[imask2];
-
-	    uint32x4_t Cv4 = vcgtq_u32(Rv4, Xmaxv4);
-	    uint32_t imask4 = vaddvq_u32(vandq_u32(Cv4, bit));
 
 	    norm3 = vqtbl1_u8(vreinterpretq_u8_u32(Rv3),vtab[imask3]);
 	    norm4 = vqtbl1_u8(vreinterpretq_u8_u32(Rv4),vtab[imask4]);
@@ -1577,8 +1267,13 @@ unsigned char *rans_compress_O1_32x16_neon(unsigned char *in,
 #define MAGIC2 179
 //#define MAGIC2 0
 typedef struct {
-    uint16_t b;
-    uint16_t f;
+  union {
+    struct {
+      uint16_t b;
+      uint16_t f;
+    } s;
+    uint32_t bf;
+  } u;
 } bf_t;
 
 static inline void transpose_and_copy(uint8_t *out, int iN[32],
@@ -1876,15 +1571,15 @@ unsigned char *rans_uncompress_O1_32x16_neon(unsigned char *in,
 			s3[i][y+x] = (((uint32_t)F[j])<<(shift+8)) |(y<<8) |j;
 
 		    memset(&sfb[i][x], j, F[j]);
-		    fb[i][j].f = F[j];
-		    fb[i][j].b = x;
+		    fb[i][j].u.s.f = F[j];
+		    fb[i][j].u.s.b = x;
 		} else {
 //		    int y;
 //		    for (y = 0; y < F[j]; y++)
 //			s3[i][y+x] = (((uint32_t)F[j])<<(shift+8)) |(y<<8) |j;
 		    memset(&sfb[i][x], j, F[j]);
-		    fb[i][j].f = F[j];
-		    fb[i][j].b = x;
+		    fb[i][j].u.s.f = F[j];
+		    fb[i][j].u.s.b = x;
 		}
 
 		x += F[j];
@@ -2168,7 +1863,7 @@ unsigned char *rans_uncompress_O1_32x16_neon(unsigned char *in,
 	    uint32_t m = R[NX-1] & ((1u<<TF_SHIFT_O1)-1);
 	    unsigned char c = sfb[l[NX-1]][m];
 	    out[i4[NX-1]] = c;
-	    R[NX-1] = fb[l[NX-1]][c].f * (R[NX-1]>>TF_SHIFT_O1) + m - fb[l[NX-1]][c].b;
+	    R[NX-1] = fb[l[NX-1]][c].u.s.f * (R[NX-1]>>TF_SHIFT_O1) + m - fb[l[NX-1]][c].u.s.b;
 	    RansDecRenormSafe(&R[NX-1], &ptr, ptr_end + 8);
 	    l[NX-1] = c;
 	}
