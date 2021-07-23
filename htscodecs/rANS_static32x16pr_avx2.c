@@ -459,9 +459,7 @@ unsigned char *rans_uncompress_O0_32x16_avx2(unsigned char *in,
     /* Load in the static tables */
     unsigned char *cp = in, *out_free = NULL;
     unsigned char *cp_end = in + in_size - 8; // within 8 => be extra safe
-    int i, j;
-    unsigned int x, y;
-    uint8_t  ssym [TOTFREQ+64]; // faster to use 16-bit on clang
+    int i;
     uint32_t s3[TOTFREQ] __attribute__((aligned(32))); // For TF_SHIFT <= 12
 
     if (!out)
@@ -479,19 +477,7 @@ unsigned char *rans_uncompress_O0_32x16_avx2(unsigned char *in,
     normalise_freq_shift(F, fsum, TOTFREQ);
 
     // Build symbols; fixme, do as part of decode, see the _d variant
-    for (j = x = 0; j < 256; j++) {
-	if (F[j]) {
-	    if (F[j] > TOTFREQ - x)
-		goto err;
-	    for (y = 0; y < F[j]; y++) {
-		ssym [y + x] = j;
-		s3[y+x] = (((uint32_t)F[j])<<(TF_SHIFT+8))|(y<<8)|j;
-	    }
-	    x += F[j];
-	}
-    }
-
-    if (x != TOTFREQ)
+    if (rans_F_to_s3(F, TF_SHIFT, s3))
 	goto err;
 
     if (cp+16 > cp_end+8)
@@ -671,7 +657,7 @@ unsigned char *rans_uncompress_O0_32x16_avx2(unsigned char *in,
     //_mm256_store_si256((__m256i *)&R[24], Rv4);
 
     for (z = out_sz & (NX-1); z-- > 0; )
-      out[out_end + z] = ssym[R[z] & mask];
+      out[out_end + z] = s3[R[z] & mask];
 
     //fprintf(stderr, "    0 Decoded %d bytes\n", (int)(cp-in)); //c-size
 
@@ -1302,8 +1288,6 @@ unsigned char *rans_uncompress_O1_32x16_avx2(unsigned char *in,
     /* Load in the static tables */
     unsigned char *cp = in, *cp_end = in+in_size, *out_free = NULL;
     unsigned char *c_freq = NULL;
-    int i, j = -999;
-    unsigned int x;
 
 #ifndef NO_THREADS
     pthread_once(&rans_once, rans_tls_init);
@@ -1323,27 +1307,6 @@ unsigned char *rans_uncompress_O1_32x16_avx2(unsigned char *in,
 #endif
     //uint32_t s3[256][TOTFREQ_O1] __attribute__((aligned(32)));
     uint32_t (*s3F)[TOTFREQ_O1_FAST] = (uint32_t (*)[TOTFREQ_O1_FAST])s3;
-
-#ifdef VALIDATE
-#define MAGIC2 179
-    typedef struct {
-	uint16_t f;
-	uint16_t b;
-    } fb_t;
-
-    uint8_t *sfb_ = calloc(256*(TOTFREQ_O1+MAGIC2), sizeof(*sfb_));
-    if (!sfb_)
-	return NULL;
-    fb_t fb[256][256];
-    uint8_t *sfb[256];
-    if ((*cp >> 4) == TF_SHIFT_O1) {
-	for (i = 0; i < 256; i++)
-	    sfb[i]=  sfb_ + i*(TOTFREQ_O1+MAGIC2);
-    } else {
-	for (i = 0; i < 256; i++)
-	    sfb[i]=  sfb_ + i*(TOTFREQ_O1_FAST+MAGIC2);
-    }
-#endif
 
     if (!out)
 	out_free = out = malloc(out_sz);
@@ -1372,67 +1335,7 @@ unsigned char *rans_uncompress_O1_32x16_avx2(unsigned char *in,
     }
 
     // Decode order-0 symbol list; avoids needing in order-1 tables
-    uint32_t F0[256] = {0};
-    int fsz = decode_alphabet(cp, c_freq_end, F0);
-    if (!fsz)
-	goto err;
-    cp += fsz;
-
-    if (cp >= c_freq_end)
-	goto err;
-
-    for (i = 0; i < 256; i++) {
-	if (F0[i] == 0)
-	    continue;
-
-	uint32_t F[256] = {0}, T = 0;
-	fsz = decode_freq_d(cp, c_freq_end, F0, F, &T);
-	if (!fsz)
-	    goto err;
-	cp += fsz;
-
-	if (!T) {
-	    //fprintf(stderr, "No freq for F_%d\n", i);
-	    continue;
-	}
-
-	normalise_freq_shift(F, T, 1<<shift);
-
-	// Build symbols; fixme, do as part of decode, see the _d variant
-	for (j = x = 0; j < 256; j++) {
-	    if (F[j]) {
-#ifdef VALIDATE
-		memset(&sfb[i][x], j, F[j]);
-		fb[i][j].f = F[j];
-		fb[i][j].b = x;
-#endif
-
-		int y;
-                for (y = 0; y < F[j]; y++) {
-		    // s3 maps [last_sym][Rmask] to next_sym
-		    if(shift == TF_SHIFT_O1)
-			s3[i][y+x] = (((uint32_t)F[j])<<(shift+8)) |(y<<8) |j;
-		    else
-			// smaller matrix for better cache
-			s3F[i][y+x] = (((uint32_t)F[j])<<(shift+8)) |(y<<8) |j;
-		}
-
-		x += F[j];
-            }
-	}
-	if (x != (1<<shift))
-	    // FIXME: if shift actually TF_SHIFT_O1 vs TF_SHIFT_O1_FAST
-	    // or can it be smaller and permit upscaling (to keep
-	    // freqs small).  If latter, check our uses of it for
-	    // initialisation of s3 etc.
-
-	    // we have O1 encoder writing (shift<<4) | do_comp for
-	    // freq table.  Check encode / decode match.
-	    // gdb -args ./tests/rans4x16pr -t -o 5 _
-	    // in /nfs/users/nfs_j/jkb/work/samtools_master/htscodecs/build
-
-	    goto err;
-    }
+    cp += decode_freq1(cp, c_freq_end, shift, s3, s3F, NULL, NULL);
 
     if (tab_end)
 	cp = tab_end;
@@ -1456,15 +1359,6 @@ unsigned char *rans_uncompress_O1_32x16_avx2(unsigned char *in,
     for (z = 0; z < NX; z++)
 	iN[z] = z*isz4;
 
-#ifdef VALIDATE
-    RansState R_[NX];
-    int i4[NX], l[NX] = {0};
-    for (z = 0; z < NX; z++) {
-	R_[z] = R[z];
-	i4[z] = iN[z];
-    }
-#endif
-
     uint16_t *sp = (uint16_t *)ptr;
     const uint32_t mask = (1u << shift)-1;
 
@@ -1479,9 +1373,6 @@ unsigned char *rans_uncompress_O1_32x16_avx2(unsigned char *in,
     unsigned int tidx = 0;
 
     if (shift == TF_SHIFT_O1) {
-#ifdef VALIDATE
-	const uint32_t mask = ((1u << TF_SHIFT_O1)-1);
-#endif
 	isz4 -= 64;
 	for (; iN[0] < isz4; ) {
 	    // m[z] = R[z] & mask;
@@ -1689,59 +1580,6 @@ unsigned char *rans_uncompress_O1_32x16_avx2(unsigned char *in,
 	    Rv3 = _mm256_blendv_epi8(Rv3, Yv3, renorm_mask3);
 	    Rv4 = _mm256_blendv_epi8(Rv4, Yv4, renorm_mask4);
 
-#ifdef VALIDATE
-	    STORE(Rv, R);
-	    for (z = 0; z < NX; z+=4) {
-		uint16_t m[4], c[4];
-		c[0] = sfb[l[z+0]][m[0] = R_[z+0] & mask];
-		c[1] = sfb[l[z+1]][m[1] = R_[z+1] & mask];
-		c[2] = sfb[l[z+2]][m[2] = R_[z+2] & mask];
-		c[3] = sfb[l[z+3]][m[3] = R_[z+3] & mask];
-		
-		R_[z+0] = fb[l[z+0]][c[0]].f * (R_[z+0]>>TF_SHIFT_O1);
-		R_[z+0] += m[0] - fb[l[z+0]][c[0]].b;
-
-		R_[z+1] = fb[l[z+1]][c[1]].f * (R_[z+1]>>TF_SHIFT_O1);
-		R_[z+1] += m[1] - fb[l[z+1]][c[1]].b;
-
-		R_[z+2] = fb[l[z+2]][c[2]].f * (R_[z+2]>>TF_SHIFT_O1);
-		R_[z+2] += m[2] - fb[l[z+2]][c[2]].b;
-
-		R_[z+3] = fb[l[z+3]][c[3]].f * (R_[z+3]>>TF_SHIFT_O1);
-		R_[z+3] += m[3] - fb[l[z+3]][c[3]].b;
-
-                i4[z+0]++; l[z+0] = c[0];
-                i4[z+1]++; l[z+1] = c[1];
-                i4[z+2]++; l[z+2] = c[2];
-                i4[z+3]++; l[z+3] = c[3];
-
-		//if (c[0] != out[iN[z+0]-1]) abort();
-		//if (c[1] != out[iN[z+1]-1]) abort();
-		//if (c[2] != out[iN[z+2]-1]) abort();
-		//if (c[3] != out[iN[z+3]-1]) abort();
-
-		if (ptr < ptr_end) {
-		    RansDecRenorm(&R_[z+0], &ptr);
-		    RansDecRenorm(&R_[z+1], &ptr);
-		    RansDecRenorm(&R_[z+2], &ptr);
-		    RansDecRenorm(&R_[z+3], &ptr);
-		} else {
-		    RansDecRenormSafe(&R_[z+0], &ptr, ptr_end+8);
-		    RansDecRenormSafe(&R_[z+1], &ptr, ptr_end+8);
-		    RansDecRenormSafe(&R_[z+2], &ptr, ptr_end+8);
-		    RansDecRenormSafe(&R_[z+3], &ptr, ptr_end+8);
-		}
-	    }
-
-	    for (z = 0; z < NX; z++) {
-		if (R[z] != R_[z]) {
-		    fprintf(stderr, "iN[0] %d, z=%d\n", iN[0], z);
-		    abort();
-		}
-	    }
-	    // assert hits at loop 13503 with z==1.
-	    // sp == ptr+2;  so we've moved on another item.
-#endif
 	}
 	isz4 += 64;
 

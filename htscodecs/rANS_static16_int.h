@@ -338,4 +338,103 @@ static inline int decode_freq_d(uint8_t *cp, uint8_t *cp_end, uint32_t *F0,
     return cp - op;
 }
 
+typedef struct {
+    uint16_t f;
+    uint16_t b;
+} fb_t;
+
+// Decode order-1 frequency table, filling out various lookup tables
+// in the process. (Which will depend on shift and which values have
+// been passed in.)
+//
+// Returns the number of bytes decoded.
+static inline int decode_freq1(uint8_t *cp, uint8_t *cp_end, int shift,
+			       uint32_t s3 [256][TOTFREQ_O1],
+			       uint32_t s3F[256][TOTFREQ_O1_FAST],
+			       uint8_t *sfb[256], fb_t fb[256][256]) {
+    uint8_t *cp_start = cp;
+    int i, j, x;
+    uint32_t F0[256] = {0};
+    int fsz = decode_alphabet(cp, cp_end, F0);
+    if (!fsz)
+	goto err;
+    cp += fsz;
+
+    if (cp >= cp_end)
+	goto err;
+
+    // silence false gcc warnings
+    if (fb) {fb [0][0].b= 0;}
+    if (s3) {s3 [0][0]  = 0;}
+    if (s3F){s3F[0][0]  = 0;}
+
+    for (i = 0; i < 256; i++) {
+	if (F0[i] == 0)
+	    continue;
+
+	uint32_t F[256] = {0}, T = 0;
+	fsz = decode_freq_d(cp, cp_end, F0, F, &T);
+	if (!fsz)
+	    goto err;
+	cp += fsz;
+
+	if (!T) {
+	    //fprintf(stderr, "No freq for F_%d\n", i);
+	    continue;
+	}
+
+	normalise_freq_shift(F, T, 1<<shift);
+
+	// Build symbols; fixme, do as part of decode, see the _d variant
+	for (j = x = 0; j < 256; j++) {
+	    if (F[j]) {
+		if (F[j] > (1<<shift) - x)
+		    goto err;
+
+		if (sfb && shift == TF_SHIFT_O1) {
+		    memset(&sfb[i][x], j, F[j]);
+		    fb[i][j].f = F[j];
+		    fb[i][j].b = x;
+		} else if (s3 && shift == TF_SHIFT_O1) {
+		    int y;
+		    for (y = 0; y < F[j]; y++)
+			s3[i][y+x] = (((uint32_t)F[j])<<(shift+8)) |(y<<8) |j;
+		} else if (s3F && shift == TF_SHIFT_O1_FAST) {
+		    int y;
+		    for (y = 0; y < F[j]; y++)
+			s3F[i][y+x] = (((uint32_t)F[j])<<(shift+8)) |(y<<8) |j;
+		}
+
+		x += F[j];
+	    }
+	}
+	if (x != (1<<shift))
+	    goto err;
+    }
+
+    return cp - cp_start;
+
+ err:
+    return 0;
+}
+
+// Build s3 symbol lookup table.
+// This is 12 bit freq, 12 bit bias and 8 bit symbol.
+static inline int rans_F_to_s3(uint32_t *F, int shift, uint32_t *s3) {
+    int j, x, y;
+    for (j = x = 0; j < 256; j++) {
+	if (F[j]) {
+	    if (F[j] > (1<<shift) - x)
+		return 1;
+	    for (y = 0; y < F[j]; y++)
+		s3[y+x] = (((uint32_t)F[j])<<(shift+8))|(y<<8)|j;
+	    x += F[j];
+	}
+    }
+
+    return x == (1<<shift) ? 0 : 1;
+}
+
+
+
 #endif // RANS_INTERNAL_H

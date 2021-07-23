@@ -588,10 +588,6 @@ void rans_tls_init(void) {
 //#define MAGIC2 111
 #define MAGIC2 179
 //#define MAGIC2 0
-typedef struct {
-    uint16_t f;
-    uint16_t b;
-} fb_t;
 
 static
 unsigned char *rans_uncompress_O1_4x16(unsigned char *in, unsigned int in_size,

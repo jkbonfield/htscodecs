@@ -488,9 +488,7 @@ unsigned char *rans_uncompress_O0_32x16_sse4(unsigned char *in,
     /* Load in the static tables */
     unsigned char *cp = in, *out_free = NULL;
     unsigned char *cp_end = in + in_size - 8; // within 8 => be extra safe
-    int i, j;
-    unsigned int x, y;
-    uint8_t  ssym [TOTFREQ+64]; // faster to use 16-bit on clang
+    int i;
     uint32_t s3[TOTFREQ] __attribute__((aligned(32))); // For TF_SHIFT <= 12
 
     if (!out)
@@ -508,19 +506,7 @@ unsigned char *rans_uncompress_O0_32x16_sse4(unsigned char *in,
     normalise_freq_shift(F, fsum, TOTFREQ);
 
     // Build symbols; fixme, do as part of decode, see the _d variant
-    for (j = x = 0; j < 256; j++) {
-	if (F[j]) {
-	    if (F[j] > TOTFREQ - x)
-		goto err;
-	    for (y = 0; y < F[j]; y++) {
-		ssym [y + x] = j;
-		s3[y+x] = (((uint32_t)F[j])<<(TF_SHIFT+8))|(y<<8)|j;
-	    }
-	    x += F[j];
-	}
-    }
-
-    if (x != TOTFREQ)
+    if (rans_F_to_s3(F, TF_SHIFT, s3))
 	goto err;
 
     if (cp+16 > cp_end+8)
@@ -794,7 +780,7 @@ unsigned char *rans_uncompress_O0_32x16_sse4(unsigned char *in,
     STORE128(Rv, R);
 
     for (z = out_sz & (NX-1); z-- > 0; )
-      out[out_end + z] = ssym[R[z] & mask];
+      out[out_end + z] = s3[R[z] & mask];
 
     //fprintf(stderr, "    0 Decoded %d bytes\n", (int)(cp-in)); //c-size
 
@@ -1006,8 +992,6 @@ unsigned char *rans_uncompress_O1_32x16_sse4(unsigned char *in,
     /* Load in the static tables */
     unsigned char *cp = in, *cp_end = in+in_size, *out_free = NULL;
     unsigned char *c_freq = NULL;
-    int i, j = -999;
-    unsigned int x;
 
     uint32_t s3[256][TOTFREQ_O1];
     uint32_t (*s3F)[TOTFREQ_O1_FAST] = (uint32_t (*)[TOTFREQ_O1_FAST])s3;
@@ -1038,57 +1022,7 @@ unsigned char *rans_uncompress_O1_32x16_sse4(unsigned char *in,
     }
 
     // Decode order-0 symbol list; avoids needing in order-1 tables
-    uint32_t F0[256] = {0};
-    int fsz = decode_alphabet(cp, c_freq_end, F0);
-    if (!fsz)
-	goto err;
-    cp += fsz;
-
-    if (cp >= c_freq_end)
-	goto err;
-
-    for (i = 0; i < 256; i++) {
-	if (F0[i] == 0)
-	    continue;
-
-	uint32_t F[256] = {0}, T = 0;
-	fsz = decode_freq_d(cp, c_freq_end, F0, F, &T);
-	if (!fsz)
-	    goto err;
-	cp += fsz;
-
-	if (!T) {
-	    //fprintf(stderr, "No freq for F_%d\n", i);
-	    continue;
-	}
-
-	normalise_freq_shift(F, T, 1<<shift);
-
-	// Build symbols; fixme, do as part of decode, see the _d variant
-	for (j = x = 0; j < 256; j++) {
-	    if (F[j]) {
-		if (F[j] > (1<<shift) - x)
-		    goto err;
-
-		if (shift == TF_SHIFT_O1_FAST) {
-		    // s3 maps [last_sym][Rmask] to next_sym
-		    int y;
-		    for (y = 0; y < F[j]; y++) {
-			// smaller matrix for better cache
-			s3F[i][y+x] = (((uint32_t)F[j])<<(shift+8)) |(y<<8) |j;
-		    }
-		} else {
-		    int y;
-		    for (y = 0; y < F[j]; y++)
-			s3[i][y+x] = (((uint32_t)F[j])<<(shift+8)) |(y<<8) |j;
-		}
-
-		x += F[j];
-	    }
-	}
-	if (x != (1<<shift))
-	    goto err;
-    }
+    cp += decode_freq1(cp, c_freq_end, shift, s3, s3F, NULL, NULL);
 
     if (tab_end)
 	cp = tab_end;

@@ -272,9 +272,7 @@ unsigned char *rans_uncompress_O0_32x16_avx512(unsigned char *in,
     /* Load in the static tables */
     unsigned char *cp = in, *out_free = NULL;
     unsigned char *cp_end = in + in_size - 8; // within 8 => be extra safe
-    int i, j;
-    unsigned int x, y;
-    uint8_t  ssym [TOTFREQ+64]; // faster to use 16-bit on clang
+    int i;
     uint32_t s3[TOTFREQ]  __attribute__((aligned(64))); // For TF_SHIFT <= 12
 
     if (!out)
@@ -292,17 +290,8 @@ unsigned char *rans_uncompress_O0_32x16_avx512(unsigned char *in,
     normalise_freq_shift(F, fsum, TOTFREQ);
 
     // Build symbols; fixme, do as part of decode, see the _d variant
-    for (j = x = 0; j < 256; j++) {
-	if (F[j]) {
-	    if (F[j] > TOTFREQ - x)
-		goto err;
-	    for (y = 0; y < F[j]; y++) {
-		ssym [y + x] = j;
-		s3[y+x] = (((uint32_t)F[j])<<(TF_SHIFT+8))|(y<<8)|j;
-	    }
-	    x += F[j];
-	}
-    }
+    if (rans_F_to_s3(F, TF_SHIFT, s3))
+	goto err;
 
     int z;
     RansState Rv[32] __attribute__((aligned(64)));
@@ -393,7 +382,7 @@ unsigned char *rans_uncompress_O0_32x16_avx512(unsigned char *in,
     _mm512_store_epi32(&Rv[16], R2);
 
     for (z = out_sz & (32-1); z-- > 0; )
-      out[out_end + z] = ssym[Rv[z] & mask];
+      out[out_end + z] = s3[Rv[z] & mask];
 
     return out;
 
@@ -928,8 +917,6 @@ unsigned char *rans_uncompress_O1_32x16_avx512(unsigned char *in,
     /* Load in the static tables */
     unsigned char *cp = in, *cp_end = in+in_size, *out_free = NULL;
     unsigned char *c_freq = NULL;
-    int i, j = -999;
-    unsigned int x;
 
 #ifndef NO_THREADS
     pthread_once(&rans_once, rans_tls_init);
@@ -976,61 +963,7 @@ unsigned char *rans_uncompress_O1_32x16_avx512(unsigned char *in,
     }
 
     // Decode order-0 symbol list; avoids needing in order-1 tables
-    uint32_t F0[256] = {0};
-    int fsz = decode_alphabet(cp, c_freq_end, F0);
-    if (!fsz)
-	goto err;
-    cp += fsz;
-
-    if (cp >= c_freq_end)
-	goto err;
-
-    for (i = 0; i < 256; i++) {
-	if (F0[i] == 0)
-	    continue;
-
-	uint32_t F[256] = {0}, T = 0;
-	fsz = decode_freq_d(cp, c_freq_end, F0, F, &T);
-	if (!fsz)
-	    goto err;
-	cp += fsz;
-
-	if (!T) {
-	    //fprintf(stderr, "No freq for F_%d\n", i);
-	    continue;
-	}
-
-	normalise_freq_shift(F, T, 1<<shift);
-
-	// Build symbols; fixme, do as part of decode, see the _d variant
-	for (j = x = 0; j < 256; j++) {
-	    if (F[j]) {
-		int y;
-                for (y = 0; y < F[j]; y++) {
-		    // s3 maps [last_sym][Rmask] to next_sym
-		    if(shift == TF_SHIFT_O1)
-			s3[i][y+x] = (((uint32_t)F[j])<<(shift+8)) |(y<<8) |j;
-		    else
-			// smaller matrix for better cache
-			s3F[i][y+x] = (((uint32_t)F[j])<<(shift+8)) |(y<<8) |j;
-		}
-
-		x += F[j];
-            }
-	}
-	if (x != (1<<shift))
-	    // FIXME: if shift actually TF_SHIFT_O1 vs TF_SHIFT_O1_FAST
-	    // or can it be smaller and permit upscaling (to keep
-	    // freqs small).  If latter, check our uses of it for
-	    // initialisation of s3 etc.
-
-	    // we have O1 encoder writing (shift<<4) | do_comp for
-	    // freq table.  Check encode / decode match.
-	    // gdb -args ./tests/rans4x16pr -t -o 5 _
-	    // in /nfs/users/nfs_j/jkb/work/samtools_master/htscodecs/build
-
-	    goto err;
-    }
+    cp += decode_freq1(cp, c_freq_end, shift, s3, s3F, NULL, NULL);
 
     if (tab_end)
 	cp = tab_end;
