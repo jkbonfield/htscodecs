@@ -298,6 +298,9 @@ unsigned char *rans_uncompress_O0_4x16(unsigned char *in, unsigned int in_size,
 //        }
 //    }
 
+#if 0
+    // Best with clang, but not a huge difference (~7% over below).
+    // Considerably slower with gcc11 (but not 7 or 10) and icc19.
     for (i = 0; cp < cp_end-8 && i < (out_sz&~7); i+=8) {
 	for (j = 0; j < 8; j+=4) {
 	    RansState m0 = RansDecGet(&R[0], TF_SHIFT);
@@ -324,6 +327,32 @@ unsigned char *rans_uncompress_O0_4x16(unsigned char *in, unsigned int in_size,
 	    RansDecRenorm(&R[3], &cp);
 	}
     }
+#else
+    // Significant speed increase for gcc 11 and icc 19.
+    // (~25% gain for both over above on Intel Xeon 6242)
+    for (i = 0; cp < cp_end-8 && i < (out_sz&~7); i+=8) {
+	for (j = 0; j < 8; j+=4) {
+	    RansState m0 = RansDecGet(&R[0], TF_SHIFT);
+	    RansState m1 = RansDecGet(&R[1], TF_SHIFT);
+	    R[0] = sfreq[m0] * (R[0] >> TF_SHIFT) + sbase[m0];
+	    R[1] = sfreq[m1] * (R[1] >> TF_SHIFT) + sbase[m1];
+	    RansDecRenorm(&R[0], &cp);
+	    RansDecRenorm(&R[1], &cp);
+
+	    RansState m3 = RansDecGet(&R[2], TF_SHIFT);
+	    RansState m4 = RansDecGet(&R[3], TF_SHIFT);
+	    R[2] = sfreq[m3] * (R[2] >> TF_SHIFT) + sbase[m3];
+	    R[3] = sfreq[m4] * (R[3] >> TF_SHIFT) + sbase[m4];
+	    RansDecRenorm(&R[2], &cp);
+	    RansDecRenorm(&R[3], &cp);
+
+	    out[i+j+0] = ssym[m0];
+	    out[i+j+1] = ssym[m1];
+	    out[i+j+2] = ssym[m3];
+	    out[i+j+3] = ssym[m4];
+	}
+    }
+#endif
 
     // remainder
     for (; i < out_sz; i++) {

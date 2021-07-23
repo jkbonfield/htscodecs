@@ -304,8 +304,8 @@ static inline void RansEncPutSymbol(RansState* r, uint8_t** pptr, RansEncSymbol 
     int c = x > x_max;
     uint16_t* ptr = *(uint16_t **)pptr;
     ptr[-1] = x & 0xffff;
-    *pptr = (uint8_t *)(ptr-c);
     x >>= c*16;
+    *pptr = (uint8_t *)(ptr-c);
 #else
     if (x > x_max) {
 	uint8_t* ptr = *pptr;
