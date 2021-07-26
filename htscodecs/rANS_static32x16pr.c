@@ -52,7 +52,6 @@
 #include "varint.h"
 #include "pack.h"
 #include "rle.h"
-#include "utils.h"
 
 #define TF_SHIFT 12
 #define TOTFREQ (1<<TF_SHIFT)
@@ -398,7 +397,7 @@ unsigned char *rans_compress_O1_32x16(unsigned char *in,
 				      unsigned int in_size,
 				      unsigned char *out,
 				      unsigned int *out_size) {
-    unsigned char *cp, *out_end, *op;
+    unsigned char *cp, *out_end;
     unsigned int tab_size;
     RansEncSymbol syms[256][256];
     int bound = rans_compress_bound_4x16(in_size,1)-20, z;
@@ -418,119 +417,19 @@ unsigned char *rans_compress_O1_32x16(unsigned char *in,
 	bound--;
     out_end = out + bound;
 
-    uint32_t F[256][256] = {{0}}, T[256+MAGIC] = {0};
-    int i, j;
+    cp = out;
 
-    //memset(F, 0, 256*256*sizeof(int));
-    //memset(T, 0, 256*sizeof(int));
-
-    hist1_4(in, in_size, F, T);
-    int isz4 = in_size/NX;
-    for (z = 1; z < NX; z++)
-	F[0][in[z*isz4]]++;
-    T[0]+=NX-1;
-
-    // Max freq causes an issue for the 12-bit decoder as we use a 12-bit
-    // slot in the uint32_t so 4096 wraps to 0.  We cope with this case
-    // during decode, but we could instead just change the spec to require
-    // 4095 as the largest freq.  This disabled code achieves this.
-    uint32_t F0[256+MAGIC] = {0};
-    if (0) {
-	// skew stats to never get max freq of 4096.
-	int x = -1, y = -1;
-	int n1, n2;
-	for (x = 0; x < 256; x++) {
-	    n1 = n2 = -1;
-	    for (y = 0; y < 256; y++) {
-		if (F[x][y])
-		    n2 = n1, n1 = y;
-	    }
-	    if (n2!=-1 || n1 == -1)
-		continue;
-
-	    for (y = 0; y < 256; y++)
-		if (!F[x][y])
-		    break;
-	    assert(y<256);
-	    F[x][y]++;
-	    F[0][y]++;
-	    F[0][x]++;
-	    T[x]++;
-	    T[y]++;
-	    F0[x]=1; F0[y]=1;
-	}
-    }
-
-
-    op = cp = out;
-    *cp++ = 0; // uncompressed header marker
-
-    // Encode the order-0 symbols for use in the order-1 frequency tables
-    //uint32_t F0[256+MAGIC] = {0};
-    present8(in, in_size, F0);
-    F0[0]=1;
-    cp += encode_alphabet(cp, F0);
-
-    // Decide between 10-bit and 12-bit freqs.
-    // Fills out S[] to hold the new scaled maximum value.
-    int S[256] = {0};
-    int shift = compute_shift(F0, F, T, S);
-
-    // Normalise so T[i] == TOTFREQ_O1
-    for (i = 0; i < 256; i++) {
-	unsigned int x;
-
-	if (F0[i] == 0)
-	    continue;
-
-	int max_val = S[i];
-	if (shift == TF_SHIFT_O1_FAST && max_val > TOTFREQ_O1_FAST)
-	    max_val = TOTFREQ_O1_FAST;
-
-	if (normalise_freq(F[i], T[i], max_val) < 0)
-	    return NULL;
-	T[i]=max_val;
-
-	cp += encode_freq_d(cp, F0, F[i]);
-
-//	fprintf(stderr, "Normalise shift T[%d]=%d shift=%d\n", i, T[i], shift);
-	normalise_freq_shift(F[i], T[i], 1<<shift); T[i]=1<<shift;
-
-	uint32_t *F_i_ = F[i];
-	for (x = j = 0; j < 256; j++) {
-//	    fprintf(stderr, "x=%d F[%d][%d]=%d shift=%d\n", x, i, j, F_i_[j], shift);
-	    RansEncSymbolInit(&syms[i][j], x, F_i_[j], shift);
-	    x += F_i_[j];
-	}
-    }
-
-    *op = shift<<4;
-    if (cp - op > 1000) {
-	// try rans0 compression of header
-	unsigned int u_freq_sz = cp-(op+1);
-	unsigned int c_freq_sz;
-	unsigned char *c_freq = rans_compress_O0_4x16(op+1, u_freq_sz, NULL,
-						      &c_freq_sz);
-	if (c_freq && c_freq_sz + 6 < cp-op) {
-	    *op++ |= 1; // compressed
-	    op += var_put_u32(op, NULL, u_freq_sz);
-	    op += var_put_u32(op, NULL, c_freq_sz);
-	    memcpy(op, c_freq, c_freq_sz);
-	    cp = op+c_freq_sz;
-	}
-	free(c_freq);
-    }
-
-    //write(2, out+4, cp-(out+4));
+    int shift = encode_freq1(in, in_size, 32, syms, &cp); 
+    if (shift < 0)
+	return NULL;
     tab_size = cp - out;
-    assert(tab_size < 257*257*3);
 
     for (z = 0; z < NX; z++)
       RansEncInit(&ransN[z]);
 
     uint8_t* ptr = out_end;
 
-    int iN[NX];
+    int iN[NX], isz4 = in_size/NX, i;
     for (z = 0; z < NX; z++)
 	iN[z] = (z+1)*isz4-2;
 

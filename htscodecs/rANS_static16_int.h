@@ -3,6 +3,7 @@
 
 #include "config.h"
 #include "varint.h"
+#include "utils.h"
 
 /*
  * Copyright (c) 2017-2021 Genome Research Ltd.
@@ -305,6 +306,117 @@ static inline int encode_freq_d(uint8_t *cp, uint32_t *F0, uint32_t *F) {
     return cp - op;
 }
 
+// Normalise frequency total T[i] to match TOTFREQ_O1 and encode.
+// Also initialises the RansEncSymbol structs.
+//
+// Returns the desired TF_SHIFT; 10 or 12 bit, or -1 on error.
+static inline int encode_freq1(uint8_t *in, uint32_t in_size, int Nway,
+			       RansEncSymbol syms[256][256], uint8_t **cp_p) {
+    int tab_size = 0, i, j, z;
+    uint8_t *out = *cp_p, *cp = out;
+
+    // Compute O1 frequency statistics
+    uint32_t F[256][256] = {{0}}, T[256+MAGIC] = {0};
+    int isz4 = in_size/Nway;
+    hist1_4(in, in_size, F, T);
+    for (z = 1; z < Nway; z++)
+	F[0][in[z*isz4]]++;
+    T[0]+=Nway-1;
+
+    // Potential fix for the wrap-around bug in AVX2 O1 encoder with shift=12.
+    // This occurs when we have one single symbol, giving freq=4096.
+    // We fix it elsewhere for now by looking for the wrap-around.
+    // See "if (1)" statements in the AVX2 code, which is an alternative
+    // to the "if (0)" here.
+//    if (0) {
+//	int x = -1, y = -1;
+//	int n1, n2;
+//	for (x = 0; x < 256; x++) {
+//	    n1 = n2 = -1;
+//	    for (y = 0; y < 256; y++) {
+//		if (F[x][y])
+//		    n2 = n1, n1 = y;
+//	    }
+//	    if (n2!=-1 || n1 == -1)
+//		continue;
+//
+//	    for (y = 0; y < 256; y++)
+//		if (!F[x][y])
+//		    break;
+//	    assert(y<256);
+//	    F[x][y]++;
+//	    F[0][y]++; T[y]++; F0[y]=1;
+//	    F[0][x]++; T[x]++; F0[x]=1;
+//	}
+//    }
+
+    // Encode the order-0 stats
+    int tmp_T0 = T[0];
+    T[0] = 1;
+    *cp++ = 0; // marker for uncompressed (may change)
+    cp += encode_alphabet(cp, T);
+    T[0] = tmp_T0;
+
+    // Decide between 10-bit and 12-bit freqs.
+    // Fills out S[] to hold the new scaled maximum value.
+    int S[256] = {0};
+    int shift = compute_shift(T, F, T, S);
+
+    // Normalise so T[i] == TOTFREQ_O1
+    for (i = 0; i < 256; i++) {
+	unsigned int x;
+
+	if (T[i] == 0)
+	    continue;
+
+	int max_val = S[i];
+	if (shift == TF_SHIFT_O1_FAST && max_val > TOTFREQ_O1_FAST)
+	    max_val = TOTFREQ_O1_FAST;
+
+	if (normalise_freq(F[i], T[i], max_val) < 0)
+	    return -1;
+	T[i]=max_val;
+
+	// Encode our frequency array
+	cp += encode_freq_d(cp, T, F[i]);
+
+	normalise_freq_shift(F[i], T[i], 1<<shift); T[i]=1<<shift;
+
+	// Initialise Rans Symbol struct too.
+	uint32_t *F_i_ = F[i];
+	for (x = j = 0; j < 256; j++) {
+	    RansEncSymbolInit(&syms[i][j], x, F_i_[j], shift);
+	    x += F_i_[j];
+	}
+    }
+
+    *out = shift<<4;
+    if (cp - out > 1000) {
+	uint8_t *op = out;
+	// try rans0 compression of header
+	unsigned int u_freq_sz = cp-(op+1);
+	unsigned int c_freq_sz;
+	unsigned char *c_freq = rans_compress_O0_4x16(op+1, u_freq_sz, NULL,
+						      &c_freq_sz);
+	if (c_freq && c_freq_sz + 6 < cp-op) {
+	    *op++ |= 1; // compressed
+	    op += var_put_u32(op, NULL, u_freq_sz);
+	    op += var_put_u32(op, NULL, c_freq_sz);
+	    memcpy(op, c_freq, c_freq_sz);
+	    cp = op+c_freq_sz;
+	}
+	free(c_freq);
+    }
+
+    tab_size = cp - out;
+    assert(tab_size < 257*257*3);
+
+    *cp_p = cp;
+    return shift;
+}
+
+// Part of decode_freq1 below.  This decodes an order-1 frequency table
+// using an order-0 table to determine which stats may be stored.
 static inline int decode_freq_d(uint8_t *cp, uint8_t *cp_end, uint32_t *F0,
 				uint32_t *F, uint32_t *total) {
     if (cp == cp_end)

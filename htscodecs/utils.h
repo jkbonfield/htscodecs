@@ -31,6 +31,9 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
+#ifndef RANS_UTILS_H
+#define RANS_UTILS_H
+
 #include <string.h>
 #include <math.h>
 
@@ -244,3 +247,5 @@ void hist1_4(unsigned char *in, unsigned int in_size,
     for (i = 0; i < 256; i++)
 	T0[i]+=T1[i]+T2[i]+T3[i];
 }
+
+#endif /* RANS_UTILS_H */
