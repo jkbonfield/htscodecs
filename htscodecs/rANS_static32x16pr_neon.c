@@ -31,6 +31,7 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
+#include "config.h"
 #include <arm_neon.h>
 
 // TODO: get access to MVE architecture so we can tune for the newer
@@ -591,9 +592,7 @@ unsigned char *rans_uncompress_O0_32x16_neon(unsigned char *in,
     /* Load in the static tables */
     unsigned char *cp = in, *out_free = NULL;
     unsigned char *cp_end = in + in_size - 8; // within 8 => be extra safe
-    int i, j;
-    unsigned int x, y;
-    uint8_t  ssym [TOTFREQ+64]; // faster to use 16-bit on clang
+    int i;
     uint32_t s3[TOTFREQ]; // For TF_SHIFT <= 12
 
     if (!out)
@@ -611,19 +610,7 @@ unsigned char *rans_uncompress_O0_32x16_neon(unsigned char *in,
     normalise_freq_shift(F, fsum, TOTFREQ);
 
     // Build symbols; fixme, do as part of decode, see the _d variant
-    for (j = x = 0; j < 256; j++) {
-	if (F[j]) {
-	    if (F[j] > TOTFREQ - x)
-		goto err;
-	    for (y = 0; y < F[j]; y++) {
-		ssym [y + x] = j; // needed?
-		s3[y+x] = (((uint32_t)F[j])<<(TF_SHIFT+8))|(y<<8)|j;
-	    }
-	    x += F[j];
-	}
-    }
-
-    if (x != TOTFREQ)
+    if (rans_F_to_s3(F, TF_SHIFT, s3))
 	goto err;
 
     if (cp+16 > cp_end+8)
@@ -884,7 +871,7 @@ unsigned char *rans_uncompress_O0_32x16_neon(unsigned char *in,
     }
 
     for (z = out_sz & (NX-1); z-- > 0; )
-      out[out_end + z] = ssym[R[z] & mask];
+      out[out_end + z] = s3[R[z] & mask];
 
     //fprintf(stderr, "    0 Decoded %d bytes\n", (int)(cp-in)); //c-size
 
@@ -901,7 +888,7 @@ unsigned char *rans_compress_O1_32x16_neon(unsigned char *in,
 					   unsigned int in_size,
 					   unsigned char *out,
 					   unsigned int *out_size) {
-    unsigned char *cp, *out_end, *op;
+    unsigned char *cp, *out_end;
     unsigned int tab_size;
     RansEncSymbol syms[256][256];
     int bound = rans_compress_bound_4x16(in_size,1)-20, z;
@@ -921,88 +908,18 @@ unsigned char *rans_compress_O1_32x16_neon(unsigned char *in,
 	bound--;
     out_end = out + bound;
 
-    uint32_t F[256][256] = {{0}}, T[256+MAGIC] = {0};
-    int i, j;
-
-    //memset(F, 0, 256*256*sizeof(int));
-    //memset(T, 0, 256*sizeof(int));
-
-    hist1_4(in, in_size, F, T);
-    int isz4 = in_size/NX;
-    for (z = 1; z < NX; z++)
-	F[0][in[z*isz4]]++;
-    T[0]+=NX-1;
-
-    uint32_t F0[256+MAGIC] = {0};
-
-    op = cp = out;
-    *cp++ = 0; // uncompressed header marker
-
-    // Encode the order-0 symbols for use in the order-1 frequency tables
-    //uint32_t F0[256+MAGIC] = {0};
-    present8(in, in_size, F0);
-    F0[0]=1;
-    cp += encode_alphabet(cp, F0);
-
-    // Decide between 10-bit and 12-bit freqs.
-    // Fills out S[] to hold the new scaled maximum value.
-    int S[256] = {0};
-    int shift = compute_shift(F0, F, T, S);
-
-    // Normalise so T[i] == TOTFREQ_O1
-    for (i = 0; i < 256; i++) {
-	unsigned int x;
-
-	if (F0[i] == 0)
-	    continue;
-
-	int max_val = S[i];
-	if (shift == TF_SHIFT_O1_FAST && max_val > TOTFREQ_O1_FAST)
-	    max_val = TOTFREQ_O1_FAST;
-
-	if (normalise_freq(F[i], T[i], max_val) < 0)
-	    return NULL;
-	T[i]=max_val;
-
-	cp += encode_freq_d(cp, F0, F[i]);
-
-//	fprintf(stderr, "Normalise shift T[%d]=%d shift=%d\n", i, T[i], shift);
-	normalise_freq_shift(F[i], T[i], 1<<shift); T[i]=1<<shift;
-
-	uint32_t *F_i_ = F[i];
-	for (x = j = 0; j < 256; j++) {
-//	    fprintf(stderr, "x=%d F[%d][%d]=%d shift=%d\n", x, i, j, F_i_[j], shift);
-	    RansEncSymbolInit(&syms[i][j], x, F_i_[j], shift);
-	    x += F_i_[j];
-	}
-    }
-
-    *op = shift<<4;
-    if (cp - op > 1000) {
-	// try rans0 compression of header
-	unsigned int u_freq_sz = cp-(op+1);
-	unsigned int c_freq_sz;
-	unsigned char *c_freq = rans_compress_O0_4x16(op+1, u_freq_sz, NULL, &c_freq_sz);
-	if (c_freq && c_freq_sz + 6 < cp-op) {
-	    *op++ |= 1; // compressed
-	    op += var_put_u32(op, NULL, u_freq_sz);
-	    op += var_put_u32(op, NULL, c_freq_sz);
-	    memcpy(op, c_freq, c_freq_sz);
-	    cp = op+c_freq_sz;
-	}
-	free(c_freq);
-    }
-
-    //write(2, out+4, cp-(out+4));
+    cp = out;
+    int shift = encode_freq1(in, in_size, 32, syms, &cp); 
+    if (shift < 0)
+	return NULL;
     tab_size = cp - out;
-    assert(tab_size < 257*257*3);
 
     for (z = 0; z < NX; z++)
       RansEncInit(&ransN[z]);
 
     uint8_t* ptr = out_end;
 
-    int iN[NX];
+    int iN[NX], isz4 = in_size/NX;
     for (z = 0; z < NX; z++)
 	iN[z] = (z+1)*isz4-2;
 
@@ -1269,10 +1186,10 @@ unsigned char *rans_compress_O1_32x16_neon(unsigned char *in,
 typedef struct {
   union {
     struct {
-      uint16_t b;
       uint16_t f;
+      uint16_t b;
     } s;
-    uint32_t bf;
+    uint32_t fb;
   } u;
 } bf_t;
 
@@ -1464,25 +1381,6 @@ unsigned char *rans_uncompress_O1_32x16_neon(unsigned char *in,
     unsigned int x;
 
 #ifndef NO_THREADS
-    /*
-     * The calloc below is expensive as it's a large structure.  We
-     * could use malloc, but we're only initialising parts of the structure
-     * that we need to, as dictated by the frequency table.  This is far
-     * faster than initialising everything (ie malloc+memset => calloc).
-     * Not initialising the data means malformed input with mismatching
-     * frequency tables to actual data can lead to accessing of the
-     * uninitialised sfb table and in turn potential leakage of the
-     * uninitialised memory returned by malloc.  That could be anything at
-     * all, including important encryption keys used within a server (for
-     * example).
-     *
-     * However (I hope!) we don't care about leaking about the sfb symbol
-     * frequencies previously computed by an earlier execution of *this*
-     * code.  So calloc once and reuse is the fastest alternative.
-     *
-     * We do this through pthread local storage as we don't know if this
-     * code is being executed in many threads simultaneously.
-     */
     pthread_once(&rans_once, rans_tls_init);
 
     uint8_t *sfb_ = pthread_getspecific(rans_key);
@@ -1533,6 +1431,10 @@ unsigned char *rans_uncompress_O1_32x16_neon(unsigned char *in,
     }
 
     // Decode order-0 symbol list; avoids needing in order-1 tables
+#if 0
+    // Disable inline for now as this is ~10% slower under gcc.  Why?
+    cp += decode_freq1(cp, c_freq_end, shift, NULL, s3, sfb, fb);
+#else
     uint32_t F0[256] = {0};
     int fsz = decode_alphabet(cp, c_freq_end, F0);
     if (!fsz)
@@ -1569,18 +1471,10 @@ unsigned char *rans_uncompress_O1_32x16_neon(unsigned char *in,
 		    int y;
 		    for (y = 0; y < F[j]; y++)
 			s3[i][y+x] = (((uint32_t)F[j])<<(shift+8)) |(y<<8) |j;
-
-		    memset(&sfb[i][x], j, F[j]);
-		    fb[i][j].u.s.f = F[j];
-		    fb[i][j].u.s.b = x;
-		} else {
-//		    int y;
-//		    for (y = 0; y < F[j]; y++)
-//			s3[i][y+x] = (((uint32_t)F[j])<<(shift+8)) |(y<<8) |j;
-		    memset(&sfb[i][x], j, F[j]);
-		    fb[i][j].u.s.f = F[j];
-		    fb[i][j].u.s.b = x;
 		}
+		memset(&sfb[i][x], j, F[j]);
+		fb[i][j].u.s.f = F[j];
+		fb[i][j].u.s.b = x;
 
 		x += F[j];
 	    }
@@ -1588,6 +1482,7 @@ unsigned char *rans_uncompress_O1_32x16_neon(unsigned char *in,
 	if (x != (1<<shift))
 	    goto err;
     }
+#endif
 
     if (tab_end)
 	cp = tab_end;
@@ -1653,77 +1548,6 @@ unsigned char *rans_uncompress_O1_32x16_neon(unsigned char *in,
 		  f32[i] = *(uint32_t *)&fb[l[z+i]][c[i]];
 		}
 		
-#if 0
-		// Try alternating loads and vtrn+vmov to transpose and widen.
-		// Unfortunately it's slower than load+combine and and/shift.
-		
-		// vcreate faster than vld1q_u32(&f32[0]).
-		// Note instead of loading freq/bias as
-		//     b1-f1 b0-f0
-		//     b3-f3 b2-f2
-		// and combining to get
-		//     b3-f3 b2-f2 b1-f1 b0-f0
-		// with subsequent SHIFT / AND ops, we can use TRN instead.
-		// Load
-		//     b2-f2 b0-f0
-		//     b3-f3 b1-f1
-		// vtrn to get:
-		//     b3-b2 b1-b0
-		//     f3-f2 f1-f0
-		// and then vmovl_u16 to widen 16x4 to 32x4
-		uint16x4_t s1a, s1b, s2a, s2b, s3a, s3b, s4a, s4b;
-		s1a = vcreate_u16((uint64_t)(f32[ 2])<<32 | f32[ 0]);
-		s1b = vcreate_u16((uint64_t)(f32[ 3])<<32 | f32[ 1]);
-		s2a = vcreate_u16((uint64_t)(f32[ 6])<<32 | f32[ 4]);
-		s2b = vcreate_u16((uint64_t)(f32[ 7])<<32 | f32[ 5]);
-		s3a = vcreate_u16((uint64_t)(f32[10])<<32 | f32[ 8]);
-		s3b = vcreate_u16((uint64_t)(f32[11])<<32 | f32[ 9]);
-		s4a = vcreate_u16((uint64_t)(f32[14])<<32 | f32[12]);
-		s4b = vcreate_u16((uint64_t)(f32[15])<<32 | f32[13]);
-
-                memcpy(l+z, c, 16);
-
-		// vcreate   = INS   = throughput 2, latency 2, pipe V
-		// vtrn1_u16 = TRN1  = throughput 2, latency 2, pipe V
-		// vmovl_u16 = USHLL = throughput 1, latency 2, pipe V1
-
-		//uint16x4_t bv1, bv2, bv3, bv4;
-		//bv1 = vtrn1_u16(s1a, s1b);
-		//bv2 = vtrn1_u16(s2a, s2b);
-		//bv3 = vtrn1_u16(s3a, s3b);
-		//bv4 = vtrn1_u16(s4a, s4b);
-
-		Bv1 = vmovl_u16(vtrn1_u16(s1a, s1b));
-		Bv2 = vmovl_u16(vtrn1_u16(s2a, s2b));
-		Bv3 = vmovl_u16(vtrn1_u16(s3a, s3b));
-		Bv4 = vmovl_u16(vtrn1_u16(s4a, s4b));
-
-		Fv1 = vmovl_u16(vtrn2_u16(s1a, s1b));
-		Fv2 = vmovl_u16(vtrn2_u16(s2a, s2b));
-		Fv3 = vmovl_u16(vtrn2_u16(s3a, s3b));
-		Fv4 = vmovl_u16(vtrn2_u16(s4a, s4b));
-
-		Bv1 = vsubq_u32(vandq_u32(Rv1, maskv), Bv1);
-		Bv2 = vsubq_u32(vandq_u32(Rv2, maskv), Bv2);
-		Bv3 = vsubq_u32(vandq_u32(Rv3, maskv), Bv3);
-		Bv4 = vsubq_u32(vandq_u32(Rv4, maskv), Bv4);
-//		Bv1 = vsubw_u16(vandq_u32(Rv1, maskv), bv1);
-//		Bv2 = vsubw_u16(vandq_u32(Rv2, maskv), bv2);
-//		Bv3 = vsubw_u16(vandq_u32(Rv3, maskv), bv3);
-//		Bv4 = vsubw_u16(vandq_u32(Rv4, maskv), bv4);
-
-		Rv1 = vshrq_n_u32(Rv1, TF_SHIFT_O1);
-		Rv2 = vshrq_n_u32(Rv2, TF_SHIFT_O1);
-		Rv3 = vshrq_n_u32(Rv3, TF_SHIFT_O1);
-		Rv4 = vshrq_n_u32(Rv4, TF_SHIFT_O1);
-
-		Rv1 = vmlaq_u32(Bv1, Fv1, Rv1);
-		Rv2 = vmlaq_u32(Bv2, Fv2, Rv2);
-		Rv3 = vmlaq_u32(Bv3, Fv3, Rv3);
-		Rv4 = vmlaq_u32(Bv4, Fv4, Rv4);
-#else
-		// A bit faster than vtrn and vmovl combination above.
-
                 // vcreate faster than vld1q_u32(&f32[0])
                 uint32x2_t s1a, s1b, s2a, s2b, s3a, s3b, s4a, s4b;
                 s1a = vcreate_u32((uint64_t)(f32[ 3])<<32 |
@@ -1754,15 +1578,16 @@ unsigned char *rans_uncompress_O1_32x16_neon(unsigned char *in,
                 Sv3 = vcombine_u32(s3b, s3a);
                 Sv4 = vcombine_u32(s4b, s4a);
 
-                Bv1 = vandq_u32(Sv1, vdupq_n_u32(0xffff));
-                Bv2 = vandq_u32(Sv2, vdupq_n_u32(0xffff));
-                Bv3 = vandq_u32(Sv3, vdupq_n_u32(0xffff));
-                Bv4 = vandq_u32(Sv4, vdupq_n_u32(0xffff));
+		Bv1 = vshrq_n_u32(Sv1, 16);
+                Bv2 = vshrq_n_u32(Sv2, 16);
 
-                Fv1 = vshrq_n_u32(Sv1, 16);
-                Fv2 = vshrq_n_u32(Sv2, 16);
-                Fv3 = vshrq_n_u32(Sv3, 16);
-                Fv4 = vshrq_n_u32(Sv4, 16);
+                Bv3 = vshrq_n_u32(Sv3, 16);
+                Bv4 = vshrq_n_u32(Sv4, 16);
+
+                Fv1 = vandq_u32(Sv1, vdupq_n_u32(0xffff));
+                Fv2 = vandq_u32(Sv2, vdupq_n_u32(0xffff));
+                Fv3 = vandq_u32(Sv3, vdupq_n_u32(0xffff));
+                Fv4 = vandq_u32(Sv4, vdupq_n_u32(0xffff));
 
 		Bv1 = vsubq_u32(vandq_u32(Rv1, maskv), Bv1);
 		Bv2 = vsubq_u32(vandq_u32(Rv2, maskv), Bv2);
@@ -1778,7 +1603,6 @@ unsigned char *rans_uncompress_O1_32x16_neon(unsigned char *in,
 		Rv2 = vmlaq_u32(Bv2, Fv2, Rv2);
 		Rv3 = vmlaq_u32(Bv3, Fv3, Rv3);
 		Rv4 = vmlaq_u32(Bv4, Fv4, Rv4);
-#endif
 
 		// Renorm
 		uint32x4_t Rlt1 = vcltq_u32(Rv1, vdupq_n_u32(RANS_BYTE_L)); // R<L
