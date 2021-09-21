@@ -97,21 +97,20 @@ int main(int argc, char **argv) {
     extern void rans_disable_avx512(void);
     extern void rans_disable_avx2(void);
 
-    while ((opt = getopt(argc, argv, "o:dtr")) != -1) {
+    while ((opt = getopt(argc, argv, "o:dtrc:")) != -1) {
 	switch (opt) {
 	case 'o': {
 	    char *optend;
 	    order = strtol(optarg, &optend, 0);
+	    // 8.2 means 2-way stripe
 	    if (*optend == '.')
 		order += atoi(optend+1)<<8;
-	    if (order & 0x400 /*X_SW32_DEC*/)
-		force_sw32_decoder();
-	    if (order & 0x800 /*X_NO_AVX512*/)
-		rans_disable_avx512();
-	    if (order & 0x1000 /*X_NO_AVX2*/)
-		rans_disable_avx2();
 	    break;
 	}
+
+	case 'c':
+	    rans_set_cpu(strtol(optarg, NULL, 0));
+	    break;
 
 	case 'd':
 	    decode = 1;

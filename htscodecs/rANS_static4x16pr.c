@@ -90,17 +90,17 @@
  */
 
 unsigned inline int rans_compress_bound_4x16(unsigned int size, int order) {
-    int N = order>>16;
+    int N = (order>>8) & 0xff;
     if (!N) N=4;
 
     order &= 0xff;
     int sz = (order == 0
 	? 1.05*size + 257*3 + 4
 	: 1.05*size + 257*257*3 + 4 + 257*3+4) +
-	((order & X_PACK) ? 1 : 0) +
-	((order & X_RLE) ? 1 + 257*3+4: 0) + 20 +
-	((order & X_32) ? (32-4)*4 : 0) +
-	((order & X_STRIPE) ? 1 + 5*N: 0);
+	((order & RANS_ORDER_PACK) ? 1 : 0) +
+	((order & RANS_ORDER_RLE) ? 1 + 257*3+4: 0) + 20 +
+	((order & RANS_ORDER_X32) ? (32-4)*4 : 0) +
+	((order & RANS_ORDER_STRIPE) ? 1 + 5*N: 0);
     return sz + (sz&1) + 2; // make this even so buffers are word aligned
 }
 
@@ -883,18 +883,12 @@ unsigned char *rans_uncompress_O1_4x16(unsigned char *in, unsigned int in_size,
  */
 #include "rANS_static32x16pr.h"
 
-static int force_sw32_enc = 0;
-static int force_sw32_dec = 0;
-static int disable_avx512 = 0;
-static int disable_avx2   = 0;
-void force_sw32_decoder(void) {
-    force_sw32_dec = 1;
-}
-void rans_disable_avx512(void) {
-    disable_avx512 = 1;
-}
-void rans_disable_avx2(void) {
-    disable_avx2 = 1;
+// Test interface for restricting the auto-detection methods so we
+// can forcibly compare different implementations on the same machine.
+// See RANS_CPU_ defines in rANS_static4x16.h
+static int rans_cpu = 0xFFFF; // all
+void rans_set_cpu(int opts) {
+    rans_cpu = opts;
 }
 
 #if defined(__GNUC__) && defined(__x86_64__)
@@ -938,12 +932,12 @@ unsigned char *(*rans_enc_func(int do_simd, int order))
 #endif
 	}
 
-	if (disable_avx512) have_avx512f = 0;
-	if (disable_avx2)   have_avx2    = 0;
-	if (force_sw32_dec || !have_popcnt)
-	    have_avx512f = have_avx2 = have_sse4_1 = 0;
-	if (!have_ssse3)
-	    have_sse4_1 = 0;
+	if (!have_popcnt) have_avx512f = have_avx2 = have_sse4_1 = 0;
+	if (!have_ssse3)  have_sse4_1 = 0;
+
+	if (!(rans_cpu & RANS_CPU_ENC_AVX512)) have_avx512f = 0;
+	if (!(rans_cpu & RANS_CPU_ENC_AVX2))   have_avx2 = 0;
+	if (!(rans_cpu & RANS_CPU_ENC_SSE4))   have_sse4_1 = 0;
 
 	if (order & 1) {
 	    return have_avx512f
@@ -1008,12 +1002,12 @@ unsigned char *(*rans_dec_func(int do_simd, int order))
 #endif
 	}
 
-	if (disable_avx512) have_avx512f = 0;
-	if (disable_avx2)   have_avx2    = 0;
-	if (force_sw32_dec || !have_popcnt)
-	    have_avx512f = have_avx2 = have_sse4_1 = 0;
-	if (!have_ssse3)
-	    have_sse4_1 = 0;
+	if (!have_popcnt) have_avx512f = have_avx2 = have_sse4_1 = 0;
+	if (!have_ssse3)  have_sse4_1 = 0;
+
+	if (!(rans_cpu & RANS_CPU_DEC_AVX512)) have_avx512f = 0;
+	if (!(rans_cpu & RANS_CPU_DEC_AVX2))   have_avx2 = 0;
+	if (!(rans_cpu & RANS_CPU_DEC_SSE4))   have_sse4_1 = 0;
 
 //	fprintf(stderr, "SSSE3 %d, SSE4.1 %d, POPCNT %d, AVX2 %d, AVX512F %d\n",
 //		have_ssse3, have_sse4_1, have_popcnt, have_avx2, have_avx512f);
@@ -1052,14 +1046,14 @@ unsigned char *(*rans_enc_func(int do_simd, int order))
      unsigned int *out_size) {
 
     if (do_simd) {
-	if (force_sw32_enc)
-	    return order & 1
-		? rans_compress_O1_32x16
-		: rans_compress_O0_32x16;
-	else
+	if (rans_cpu & RANS_CPU_ENC_NEON)
 	    return order & 1
 		? rans_compress_O1_32x16_neon
 		: rans_compress_O0_32x16_neon;
+	else
+		? rans_compress_O1_32x16
+		: rans_compress_O0_32x16;
+	else
     } else {
 	return order & 1
 	    ? rans_compress_O1_4x16
@@ -1075,14 +1069,14 @@ unsigned char *(*rans_dec_func(int do_simd, int order))
      unsigned int out_size) {
 
     if (do_simd) {
-	if (force_sw32_enc)
-	    return order & 1
-		? rans_uncompress_O1_32x16
-		: rans_uncompress_O0_32x16;
-	else
+	if (rans_cpu & RANS_CPU_DEC_NEON)
 	    return order & 1
 		? rans_uncompress_O1_32x16_neon
 		: rans_uncompress_O0_32x16_neon;
+	else
+	    return order & 1
+		? rans_uncompress_O1_32x16
+		: rans_uncompress_O0_32x16;
     } else {
 	return order & 1
 	    ? rans_uncompress_O1_4x16
@@ -1164,28 +1158,18 @@ unsigned char *rans_compress_to_4x16(unsigned char *in,  unsigned int in_size,
 
     // Permit 32-way unrolling for large blocks, paving the way for
     // AVX2 and AVX512 SIMD variants.
-    if ((order & X_SIMD_AUTO) && in_size >= 50000 && !(order & X_STRIPE))
+    if ((order & RANS_ORDER_SIMD_AUTO) && in_size >= 50000
+	&& !(order & RANS_ORDER_STRIPE))
 	order |= X_32;
 
-    // Disable SIMD support, for testing different code paths.
-    if (order & X_SW32_ENC) {
-	force_sw32_enc = 1;
-	order &= ~(X_SW32_ENC|X_SW32_DEC);
-    }
-    if (order & X_NO_AVX512)
-	disable_avx512 = 1;
-
     if (in_size <= 20)
-	order &= ~X_STRIPE;
+	order &= ~RANS_ORDER_STRIPE;
     if (in_size <= 1000)
-	order &= ~X_32;
+	order &= ~RANS_ORDER_X32;
 
-    if (order & X_STRIPE) {
-	int N = (order>>16);
+    if (order & RANS_ORDER_STRIPE) {
+	int N = (order>>8) & 0xff;
 	if (N == 0) N = 4; // default for compatibility with old tests
-
-	if (N > 255)
-	    return NULL;
 
 	unsigned char *transposed = malloc(in_size);
 	unsigned int part_len[256];
@@ -1211,41 +1195,64 @@ unsigned char *rans_compress_to_4x16(unsigned char *in,  unsigned int in_size,
 	unsigned int olen2;
 	unsigned char *out2, *out2_start;
 	c_meta_len = 1;
-	*out = order & ~X_NOSZ;
+	*out = order & ~RANS_ORDER_NOSZ;
 	c_meta_len += var_put_u32(out+c_meta_len, out_end, in_size);
 	out[c_meta_len++] = N;
 	
+	unsigned char *out_best = NULL;
+	unsigned int out_best_len = 0;
+
 	out2_start = out2 = out+2+5*N; // shares a buffer with c_meta
         for (i = 0; i < N; i++) {
             // Brute force try all methods.
             int j, m[] = {1,64,128,0}, best_j = 0, best_sz = in_size+10;
-            for (j = 0; j < 4; j++) {
+            for (j = 0; j < sizeof(m)/sizeof(*m); j++) {
 		if ((order & m[j]) != m[j])
                     continue;
+
+		// order-1 *only*; bit check above cannot elide order-0
+		if ((order & RANS_ORDER_STRIPE_NO0) && (m[j]&1) == 0)
+		    continue;
                 olen2 = *out_size - (out2 - out);
                 rans_compress_to_4x16(transposed+idx[i], part_len[i],
-				      out2, &olen2, m[j] | X_NOSZ);
+				      out2, &olen2,
+				      m[j] | RANS_ORDER_NOSZ
+				      | (order&RANS_ORDER_X32));
                 if (best_sz > olen2) {
                     best_sz = olen2;
                     best_j = j;
+		    if (j < sizeof(m)/sizeof(*m) && olen2 > out_best_len) {
+			unsigned char *tmp = realloc(out_best, olen2);
+			if (!tmp)
+			    return NULL;
+			out_best = tmp;
+			out_best_len = olen2;
+		    }
+
+		    // Cache a copy of the best so far
+		    memcpy(out_best, out2, olen2);
                 }
             }
-	    if (best_j != j-1) {
-		olen2 = *out_size - (out2 - out);
-		rans_compress_to_4x16(transposed+idx[i], part_len[i],
-				      out2, &olen2, m[best_j] | X_NOSZ);
+	    if (best_j < sizeof(m)/sizeof(*m)) {
+		// Copy the best compression to output buffer if not current
+		memcpy(out2, out_best, best_sz);
+		olen2 = best_sz;
 	    }
+
             out2 += olen2;
             c_meta_len += var_put_u32(out+c_meta_len, out_end, olen2);
         }
+	if (out_best)
+	    free(out_best);
+
 	memmove(out+c_meta_len, out2_start, out2-out2_start);
 	free(transposed);
 	*out_size = c_meta_len + out2-out2_start;
 	return out;
     }
 
-    if (order & X_CAT) {
-	out[0] = X_CAT;
+    if (order & RANS_ORDER_CAT) {
+	out[0] = RANS_ORDER_CAT;
 	c_meta_len = 1;
 	c_meta_len += var_put_u32(&out[1], out_end, in_size);
 	memcpy(out+c_meta_len, in, in_size);
@@ -1253,10 +1260,10 @@ unsigned char *rans_compress_to_4x16(unsigned char *in,  unsigned int in_size,
 	return out;
     }
 
-    int do_pack = order & X_PACK;
-    int do_rle  = order & X_RLE;
-    int no_size = order & X_NOSZ;
-    int do_simd = order & X_32;
+    int do_pack = order & RANS_ORDER_PACK;
+    int do_rle  = order & RANS_ORDER_RLE;
+    int no_size = order & RANS_ORDER_NOSZ;
+    int do_simd = order & RANS_ORDER_X32;
 
     out[0] = order;
     c_meta_len = 1;
@@ -1277,7 +1284,7 @@ unsigned char *rans_compress_to_4x16(unsigned char *in,  unsigned int in_size,
 	uint64_t packed_len;
 	packed = hts_pack(in, in_size, out+c_meta_len, &pmeta_len, &packed_len);
 	if (!packed || (pmeta_len == 1 && out[c_meta_len] > 16)) {
-	    out[0] &= ~X_PACK;
+	    out[0] &= ~RANS_ORDER_PACK;
 	    do_pack = 0;
 	    free(packed);
 	    packed = NULL;
@@ -1293,7 +1300,7 @@ unsigned char *rans_compress_to_4x16(unsigned char *in,  unsigned int in_size,
 	    *out_size -= sz;
 	}
     } else if (do_pack) {
-	out[0] &= ~X_PACK;
+	out[0] &= ~RANS_ORDER_PACK;
     }
 
     if (do_rle && in_size) {
@@ -1316,7 +1323,7 @@ unsigned char *rans_compress_to_4x16(unsigned char *in,  unsigned int in_size,
 
 	if (!rle || rle_len + rmeta_len >= .99*in_size) {
 	    // Not worth the speed hit.
-	    out[0] &= ~X_RLE;
+	    out[0] &= ~RANS_ORDER_RLE;
 	    do_rle = 0;
 	    free(rle);
 	    rle = NULL;
@@ -1345,7 +1352,7 @@ unsigned char *rans_compress_to_4x16(unsigned char *in,  unsigned int in_size,
 
 	free(meta);
     } else if (do_rle) {
-	out[0] &= ~X_RLE;
+	out[0] &= ~RANS_ORDER_RLE;
     }
 
     *out_size -= c_meta_len;
@@ -1358,7 +1365,7 @@ unsigned char *rans_compress_to_4x16(unsigned char *in,  unsigned int in_size,
 
     if (*out_size >= in_size) {
 	out[0] &= ~3;
-	out[0] |= X_CAT | no_size;
+	out[0] |= RANS_ORDER_CAT | no_size;
 	memcpy(out+c_meta_len, in, in_size);
 	*out_size = in_size;
     }
@@ -1384,7 +1391,7 @@ unsigned char *rans_uncompress_to_4x16(unsigned char *in,  unsigned int in_size,
     if (in_size == 0)
 	return NULL;
 
-    if (*in & X_STRIPE) {
+    if (*in & RANS_ORDER_STRIPE) {
 	unsigned int ulen, olen, c_meta_len = 1;
 	int i;
 	uint64_t clen_tot = 0;
@@ -1460,11 +1467,11 @@ unsigned char *rans_uncompress_to_4x16(unsigned char *in,  unsigned int in_size,
     }
 
     int order = *in++;  in_size--;
-    int do_pack = order & X_PACK;
-    int do_rle  = order & X_RLE;
-    int do_cat  = order & X_CAT;
-    int no_size = order & X_NOSZ;
-    int do_simd = order & X_32;
+    int do_pack = order & RANS_ORDER_PACK;
+    int do_rle  = order & RANS_ORDER_RLE;
+    int do_cat  = order & RANS_ORDER_CAT;
+    int no_size = order & RANS_ORDER_NOSZ;
+    int do_simd = order & RANS_ORDER_X32;
     order &= 1;
 
     int sz = 0;

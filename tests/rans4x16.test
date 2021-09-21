@@ -33,32 +33,29 @@ do
     do
         printf 'Testing rans4x16 -r -o%s on %s\t' $o "$f"
 
-	# scalar version of $o
-	os=`expr $o + 512 + 1024`
-
 	# Round trip
 	# SIMD vs SIMD (auto)
-        ./rans4x16pr -r -o$o  $out/r4x16-nl $out/r4x16.comp 2>>$out/r4x16.stderr || exit 1
+        ./rans4x16pr -r -o$o $out/r4x16-nl $out/r4x16.comp 2>>$out/r4x16.stderr || exit 1
 	wc -c < $out/r4x16.comp
         ./rans4x16pr -r -d $out/r4x16.comp $out/r4x16.uncomp  2>>$out/r4x16.stderr || exit 1
         cmp $out/r4x16-nl $out/r4x16.uncomp || exit 1
 
 	# Scalar vs scalar
-        ./rans4x16pr -r -o$os  $out/r4x16-nl $out/r4x16.comp 2>>$out/r4x16.stderr || exit 1
+        ./rans4x16pr -r -o$o -c 0 $out/r4x16-nl $out/r4x16.comp 2>>$out/r4x16.stderr || exit 1
 	wc -c < $out/r4x16.comp
-        ./rans4x16pr -r -d -o$os $out/r4x16.comp $out/r4x16.uncomp  2>>$out/r4x16.stderr || exit 1
+        ./rans4x16pr -r -d -o$o -c 0 $out/r4x16.comp $out/r4x16.uncomp  2>>$out/r4x16.stderr || exit 1
         cmp $out/r4x16-nl $out/r4x16.uncomp || exit 1
 
 	# Scalar vs SIMD
-        ./rans4x16pr -r -o$o  $out/r4x16-nl $out/r4x16.comp 2>>$out/r4x16.stderr || exit 1
+        ./rans4x16pr -r -o$o -c 0 $out/r4x16-nl $out/r4x16.comp 2>>$out/r4x16.stderr || exit 1
 	wc -c < $out/r4x16.comp
-        ./rans4x16pr -r -d -o$os $out/r4x16.comp $out/r4x16.uncomp  2>>$out/r4x16.stderr || exit 1
+        ./rans4x16pr -r -d -o$o $out/r4x16.comp $out/r4x16.uncomp  2>>$out/r4x16.stderr || exit 1
         cmp $out/r4x16-nl $out/r4x16.uncomp || exit 1
 
 	# SIMD vs Scalar
         ./rans4x16pr -r -o$o  $out/r4x16-nl $out/r4x16.comp 2>>$out/r4x16.stderr || exit 1
 	wc -c < $out/r4x16.comp
-        ./rans4x16pr -r -d -o$os $out/r4x16.comp $out/r4x16.uncomp  2>>$out/r4x16.stderr || exit 1
+        ./rans4x16pr -r -d -o$o -c 0 $out/r4x16.comp $out/r4x16.uncomp  2>>$out/r4x16.stderr || exit 1
         cmp $out/r4x16-nl $out/r4x16.uncomp || exit 1
 
 #	# Precompressed data
