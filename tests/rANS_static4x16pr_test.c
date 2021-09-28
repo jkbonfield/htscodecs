@@ -44,8 +44,9 @@
 #include "htscodecs/rANS_static4x16.h"
 
 #ifndef BLK_SIZE
-// Divisible by 4 for X4
-#  define BLK_SIZE 1039*251*4
+// Divisible by 4 for X4.
+// Also works well for 32-way SIMD
+#  define BLK_SIZE 0x103810
 #endif
 
 // Room to allow for expanded BLK_SIZE on worst case compression.

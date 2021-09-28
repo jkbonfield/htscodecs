@@ -547,6 +547,87 @@ static inline int rans_F_to_s3(uint32_t *F, int shift, uint32_t *s3) {
     return x == (1<<shift) ? 0 : 1;
 }
 
+#ifdef ROT32_SIMD
+#include <x86intrin.h>
 
+// Our own implementation of _mm256_set_m128i as it's not there on older
+// gcc implementations.  This is basically the same thing.
+static inline __m256i _mm256_set_m128ix(__m128i H, __m128i L) {
+    return _mm256_insertf128_si256(_mm256_castsi128_si256(L), H, 1);
+}
+
+static inline void rot32_simd(uint8_t t[32][32], uint8_t *out, int iN[32]) {
+    int z;
+
+    __m256i lh8[32];
+    for (z = 0; z < 32/2; z+=2) {
+	__m256i a, b, c, d;
+	a = _mm256_loadu_si256((__m256i *)&t[z*2+0]);
+	b = _mm256_loadu_si256((__m256i *)&t[z*2+1]);
+	c = _mm256_loadu_si256((__m256i *)&t[z*2+2]);
+	d = _mm256_loadu_si256((__m256i *)&t[z*2+3]);
+
+	lh8[z+0]  = _mm256_unpacklo_epi8(a, b);
+	lh8[z+16] = _mm256_unpackhi_epi8(a, b);
+	lh8[z+1]  = _mm256_unpacklo_epi8(c, d);
+	lh8[z+17] = _mm256_unpackhi_epi8(c, d);
+    }
+
+    __m256i lh32[32];
+    for (z = 0; z < 32/4; z+=2) {
+	__m256i a, b, c, d;
+	a = _mm256_unpacklo_epi16(lh8[z*4+0], lh8[z*4+1]);
+	b = _mm256_unpacklo_epi16(lh8[z*4+2], lh8[z*4+3]);
+	c = _mm256_unpackhi_epi16(lh8[z*4+0], lh8[z*4+1]);
+	d = _mm256_unpackhi_epi16(lh8[z*4+2], lh8[z*4+3]);
+
+	__m256i e, f, g, h;
+	e = _mm256_unpacklo_epi16(lh8[(z+1)*4+0], lh8[(z+1)*4+1]);
+	f = _mm256_unpacklo_epi16(lh8[(z+1)*4+2], lh8[(z+1)*4+3]);
+	g = _mm256_unpackhi_epi16(lh8[(z+1)*4+0], lh8[(z+1)*4+1]);
+	h = _mm256_unpackhi_epi16(lh8[(z+1)*4+2], lh8[(z+1)*4+3]);
+
+	lh32[z+0]  = _mm256_unpacklo_epi32(a,b);
+	lh32[z+8]  = _mm256_unpacklo_epi32(c,d);
+	lh32[z+16] = _mm256_unpackhi_epi32(a,b);
+	lh32[z+24] = _mm256_unpackhi_epi32(c,d);
+
+	lh32[z+1+0]  = _mm256_unpacklo_epi32(e,f);
+	lh32[z+1+8]  = _mm256_unpacklo_epi32(g,h);
+	lh32[z+1+16] = _mm256_unpackhi_epi32(e,f);
+	lh32[z+1+24] = _mm256_unpackhi_epi32(g,h);
+    }
+
+    // Final unpack 64 and store
+    int idx[] = {0, 8, 4, 12, 2, 10, 6, 14};
+    for (z = 0; z < 8; z++) {
+	int i = idx[z];
+
+	// Putting this here doesn't soeed things up
+	__m256i a = _mm256_unpacklo_epi64(lh32[i*2+0], lh32[i*2+1]);
+	__m256i b = _mm256_unpacklo_epi64(lh32[i*2+2], lh32[i*2+3]);
+	__m256i c = _mm256_unpackhi_epi64(lh32[i*2+0], lh32[i*2+1]);
+	__m256i d = _mm256_unpackhi_epi64(lh32[i*2+2], lh32[i*2+3]);
+
+	__m256i p = _mm256_set_m128ix(_mm256_extracti128_si256(b,0),
+				      _mm256_extracti128_si256(a,0));
+	__m256i q = _mm256_set_m128ix(_mm256_extracti128_si256(d,0),
+				      _mm256_extracti128_si256(c,0));
+	__m256i r = _mm256_set_m128ix(_mm256_extracti128_si256(b,1),
+				      _mm256_extracti128_si256(a,1));
+	__m256i s = _mm256_set_m128ix(_mm256_extracti128_si256(d,1),
+				      _mm256_extracti128_si256(c,1));
+
+	_mm256_storeu_si256((__m256i *)(&out[iN[z*2+0]]),  p);
+	_mm256_storeu_si256((__m256i *)(&out[iN[z*2+1]]),  q);
+	_mm256_storeu_si256((__m256i *)(&out[iN[z*2+16]]), r);
+	_mm256_storeu_si256((__m256i *)(&out[iN[z*2+17]]), s);
+    }
+
+    // Store
+    for (z = 0; z < 32; z++)
+	iN[z] += 32;
+}
+#endif
 
 #endif // RANS_INTERNAL_H

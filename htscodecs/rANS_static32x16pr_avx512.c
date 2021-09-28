@@ -58,6 +58,7 @@
 
 #include "rANS_word.h"
 #include "rANS_static4x16.h"
+#define ROT32_SIMD
 #include "rANS_static16_int.h"
 #include "varint.h"
 #include "pack.h"
@@ -391,11 +392,15 @@ unsigned char *rans_uncompress_O0_32x16_avx512(unsigned char *in,
     return NULL;
 }
 
-//#define TBUF8
+#define TBUF8
 #ifdef TBUF8
+// 15% quicker overall O1 decode now due to rot32_simd below.
+
+// NB: This uses AVX2 though and we could rewrite using AVX512 for
+// further speed gains.
 static inline void transpose_and_copy(uint8_t *out, int iN[32],
 				      uint8_t t[32][32]) {
-    int z;
+//  int z;
 //  for (z = 0; z < 32; z++) {
 //      int k;
 //      for (k = 0; k < 32; k++)
@@ -403,164 +408,13 @@ static inline void transpose_and_copy(uint8_t *out, int iN[32],
 //      iN[z] += 32;
 //  }
 
-    
-    // FIXME: use avx512 gather
-    for (z = 0; z < 32; z+=4) {
-	*(uint64_t *)&out[iN[z]] =
-	    ((uint64_t)(t[0][z])<< 0) +
-	    ((uint64_t)(t[1][z])<< 8) +
-	    ((uint64_t)(t[2][z])<<16) +
-	    ((uint64_t)(t[3][z])<<24) +
-	    ((uint64_t)(t[4][z])<<32) +
-	    ((uint64_t)(t[5][z])<<40) +
-	    ((uint64_t)(t[6][z])<<48) +
-	    ((uint64_t)(t[7][z])<<56);
-	*(uint64_t *)&out[iN[z+1]] =
-	    ((uint64_t)(t[0][z+1])<< 0) +
-	    ((uint64_t)(t[1][z+1])<< 8) +
-	    ((uint64_t)(t[2][z+1])<<16) +
-	    ((uint64_t)(t[3][z+1])<<24) +
-	    ((uint64_t)(t[4][z+1])<<32) +
-	    ((uint64_t)(t[5][z+1])<<40) +
-	    ((uint64_t)(t[6][z+1])<<48) +
-	    ((uint64_t)(t[7][z+1])<<56);
-	*(uint64_t *)&out[iN[z+2]] =
-	    ((uint64_t)(t[0][z+2])<< 0) +
-	    ((uint64_t)(t[1][z+2])<< 8) +
-	    ((uint64_t)(t[2][z+2])<<16) +
-	    ((uint64_t)(t[3][z+2])<<24) +
-	    ((uint64_t)(t[4][z+2])<<32) +
-	    ((uint64_t)(t[5][z+2])<<40) +
-	    ((uint64_t)(t[6][z+2])<<48) +
-	    ((uint64_t)(t[7][z+2])<<56);
-	*(uint64_t *)&out[iN[z+3]] =
-	    ((uint64_t)(t[0][z+3])<< 0) +
-	    ((uint64_t)(t[1][z+3])<< 8) +
-	    ((uint64_t)(t[2][z+3])<<16) +
-	    ((uint64_t)(t[3][z+3])<<24) +
-	    ((uint64_t)(t[4][z+3])<<32) +
-	    ((uint64_t)(t[5][z+3])<<40) +
-	    ((uint64_t)(t[6][z+3])<<48) +
-	    ((uint64_t)(t[7][z+3])<<56);
-
-	*(uint64_t *)&out[iN[z]+8] =
-	    ((uint64_t)(t[8+0][z])<< 0) +
-	    ((uint64_t)(t[8+1][z])<< 8) +
-	    ((uint64_t)(t[8+2][z])<<16) +
-	    ((uint64_t)(t[8+3][z])<<24) +
-	    ((uint64_t)(t[8+4][z])<<32) +
-	    ((uint64_t)(t[8+5][z])<<40) +
-	    ((uint64_t)(t[8+6][z])<<48) +
-	    ((uint64_t)(t[8+7][z])<<56);
-	*(uint64_t *)&out[iN[z+1]+8] =
-	    ((uint64_t)(t[8+0][z+1])<< 0) +
-	    ((uint64_t)(t[8+1][z+1])<< 8) +
-	    ((uint64_t)(t[8+2][z+1])<<16) +
-	    ((uint64_t)(t[8+3][z+1])<<24) +
-	    ((uint64_t)(t[8+4][z+1])<<32) +
-	    ((uint64_t)(t[8+5][z+1])<<40) +
-	    ((uint64_t)(t[8+6][z+1])<<48) +
-	    ((uint64_t)(t[8+7][z+1])<<56);
-	*(uint64_t *)&out[iN[z+2]+8] =
-	    ((uint64_t)(t[8+0][z+2])<< 0) +
-	    ((uint64_t)(t[8+1][z+2])<< 8) +
-	    ((uint64_t)(t[8+2][z+2])<<16) +
-	    ((uint64_t)(t[8+3][z+2])<<24) +
-	    ((uint64_t)(t[8+4][z+2])<<32) +
-	    ((uint64_t)(t[8+5][z+2])<<40) +
-	    ((uint64_t)(t[8+6][z+2])<<48) +
-	    ((uint64_t)(t[8+7][z+2])<<56);
-	*(uint64_t *)&out[iN[z+3]+8] =
-	    ((uint64_t)(t[8+0][z+3])<< 0) +
-	    ((uint64_t)(t[8+1][z+3])<< 8) +
-	    ((uint64_t)(t[8+2][z+3])<<16) +
-	    ((uint64_t)(t[8+3][z+3])<<24) +
-	    ((uint64_t)(t[8+4][z+3])<<32) +
-	    ((uint64_t)(t[8+5][z+3])<<40) +
-	    ((uint64_t)(t[8+6][z+3])<<48) +
-	    ((uint64_t)(t[8+7][z+3])<<56);
-
-	*(uint64_t *)&out[iN[z]+16] =
-	    ((uint64_t)(t[16+0][z])<< 0) +
-	    ((uint64_t)(t[16+1][z])<< 8) +
-	    ((uint64_t)(t[16+2][z])<<16) +
-	    ((uint64_t)(t[16+3][z])<<24) +
-	    ((uint64_t)(t[16+4][z])<<32) +
-	    ((uint64_t)(t[16+5][z])<<40) +
-	    ((uint64_t)(t[16+6][z])<<48) +
-	    ((uint64_t)(t[16+7][z])<<56);
-	*(uint64_t *)&out[iN[z+1]+16] =
-	    ((uint64_t)(t[16+0][z+1])<< 0) +
-	    ((uint64_t)(t[16+1][z+1])<< 8) +
-	    ((uint64_t)(t[16+2][z+1])<<16) +
-	    ((uint64_t)(t[16+3][z+1])<<24) +
-	    ((uint64_t)(t[16+4][z+1])<<32) +
-	    ((uint64_t)(t[16+5][z+1])<<40) +
-	    ((uint64_t)(t[16+6][z+1])<<48) +
-	    ((uint64_t)(t[16+7][z+1])<<56);
-	*(uint64_t *)&out[iN[z+2]+16] =
-	    ((uint64_t)(t[16+0][z+2])<< 0) +
-	    ((uint64_t)(t[16+1][z+2])<< 8) +
-	    ((uint64_t)(t[16+2][z+2])<<16) +
-	    ((uint64_t)(t[16+3][z+2])<<24) +
-	    ((uint64_t)(t[16+4][z+2])<<32) +
-	    ((uint64_t)(t[16+5][z+2])<<40) +
-	    ((uint64_t)(t[16+6][z+2])<<48) +
-	    ((uint64_t)(t[16+7][z+2])<<56);
-	*(uint64_t *)&out[iN[z+3]+16] =
-	    ((uint64_t)(t[16+0][z+3])<< 0) +
-	    ((uint64_t)(t[16+1][z+3])<< 8) +
-	    ((uint64_t)(t[16+2][z+3])<<16) +
-	    ((uint64_t)(t[16+3][z+3])<<24) +
-	    ((uint64_t)(t[16+4][z+3])<<32) +
-	    ((uint64_t)(t[16+5][z+3])<<40) +
-	    ((uint64_t)(t[16+6][z+3])<<48) +
-	    ((uint64_t)(t[16+7][z+3])<<56);
-
-	*(uint64_t *)&out[iN[z]+24] =
-	    ((uint64_t)(t[24+0][z])<< 0) +
-	    ((uint64_t)(t[24+1][z])<< 8) +
-	    ((uint64_t)(t[24+2][z])<<16) +
-	    ((uint64_t)(t[24+3][z])<<24) +
-	    ((uint64_t)(t[24+4][z])<<32) +
-	    ((uint64_t)(t[24+5][z])<<40) +
-	    ((uint64_t)(t[24+6][z])<<48) +
-	    ((uint64_t)(t[24+7][z])<<56);
-	*(uint64_t *)&out[iN[z+1]+24] =
-	    ((uint64_t)(t[24+0][z+1])<< 0) +
-	    ((uint64_t)(t[24+1][z+1])<< 8) +
-	    ((uint64_t)(t[24+2][z+1])<<16) +
-	    ((uint64_t)(t[24+3][z+1])<<24) +
-	    ((uint64_t)(t[24+4][z+1])<<32) +
-	    ((uint64_t)(t[24+5][z+1])<<40) +
-	    ((uint64_t)(t[24+6][z+1])<<48) +
-	    ((uint64_t)(t[24+7][z+1])<<56);
-	*(uint64_t *)&out[iN[z+2]+24] =
-	    ((uint64_t)(t[24+0][z+2])<< 0) +
-	    ((uint64_t)(t[24+1][z+2])<< 8) +
-	    ((uint64_t)(t[24+2][z+2])<<16) +
-	    ((uint64_t)(t[24+3][z+2])<<24) +
-	    ((uint64_t)(t[24+4][z+2])<<32) +
-	    ((uint64_t)(t[24+5][z+2])<<40) +
-	    ((uint64_t)(t[24+6][z+2])<<48) +
-	    ((uint64_t)(t[24+7][z+2])<<56);
-	*(uint64_t *)&out[iN[z+3]+24] =
-	    ((uint64_t)(t[24+0][z+3])<< 0) +
-	    ((uint64_t)(t[24+1][z+3])<< 8) +
-	    ((uint64_t)(t[24+2][z+3])<<16) +
-	    ((uint64_t)(t[24+3][z+3])<<24) +
-	    ((uint64_t)(t[24+4][z+3])<<32) +
-	    ((uint64_t)(t[24+5][z+3])<<40) +
-	    ((uint64_t)(t[24+6][z+3])<<48) +
-	    ((uint64_t)(t[24+7][z+3])<<56);
-
-	iN[z+0] += 32;
-	iN[z+1] += 32;
-	iN[z+2] += 32;
-	iN[z+3] += 32;
-    }
+    rot32_simd(t, out, iN);
 }
+
 #else
+// Implemented using AVX512 gathers.
+// This is faster than a naive scalar implementation, but doesn't beat the
+// AVX2 vectorised 32x32 transpose function.
 static inline void transpose_and_copy_avx512(uint8_t *out, int iN[32],
 					     uint32_t t32[32][32]) {
     int z;
