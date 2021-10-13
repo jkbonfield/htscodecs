@@ -84,9 +84,9 @@ static inline void unstripe(unsigned char *out, unsigned char *outN,
 static inline
 void hist8(unsigned char *in, unsigned int in_size, uint32_t F0[256]) {
     if (in_size > 500000) {
-	uint32_t f0[65536+37] = {};
-	uint32_t f1[65536+37] = {};
-	uint32_t f2[65536+37] = {};
+	uint32_t f0[65536+37] = {0};
+	uint32_t f1[65536+37] = {0};
+	uint32_t f2[65536+37] = {0};
 
 	uint32_t i, i8 = in_size & ~15;
 
@@ -113,7 +113,7 @@ void hist8(unsigned char *in, unsigned int in_size, uint32_t F0[256]) {
 	    F0[i >> 8  ] += f0[i] + f1[i] + f2[i];
 	}
     } else {
-	uint32_t F1[256+MAGIC] = {}, F2[256+MAGIC] = {}, F3[256+MAGIC] = {};
+	uint32_t F1[256+MAGIC] = {0}, F2[256+MAGIC] = {0}, F3[256+MAGIC] = {0};
 	uint32_t i, i8 = in_size & ~7;
 
 	for (i = 0; i < i8; i+=8) {
@@ -279,8 +279,8 @@ void hist1_4(unsigned char *in, unsigned int in_size,
 static inline
 void hist1_4(unsigned char *in, unsigned int in_size,
 	     uint32_t F0[256][256], uint32_t *T0) {
-    uint32_t f0[65536+MAGIC] = {};
-    uint32_t f1[65536+MAGIC] = {};
+    uint32_t f0[65536+MAGIC] = {0};
+    uint32_t f1[65536+MAGIC] = {0};
 
     uint32_t i, i8 = (in_size-1) & ~15;
 
