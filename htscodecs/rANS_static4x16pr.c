@@ -1051,9 +1051,9 @@ unsigned char *(*rans_enc_func(int do_simd, int order))
 		? rans_compress_O1_32x16_neon
 		: rans_compress_O0_32x16_neon;
 	else
+	    return order & 1
 		? rans_compress_O1_32x16
 		: rans_compress_O0_32x16;
-	else
     } else {
 	return order & 1
 	    ? rans_compress_O1_4x16
