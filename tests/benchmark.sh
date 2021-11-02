@@ -16,30 +16,40 @@ echo   "------------------------------------------"
 
 # Order-0
 set -- $(for i in `seq 1 $ntrials`;do
-	     $r4x8 -t -o0 $file 2>&1
-	 done | awk "$awkscript")
-printf "r4x8    -o0       %10d %6.1f %6.1f\n" $5 $2 $4
+             $r4x8 -t -o0 $file 2>&1
+         done | awk "$awkscript")
+printf "r4x8    -o0           %10d %6.1f %6.1f\n" $5 $2 $4
 
-for o in 0 0x604 0x1804 0x804 4
+set -- $(for i in `seq 1 $ntrials`;do
+             $r4x16 -t -o0 $file 2>&1
+        done | awk "$awkscript")
+printf "r4x16   -o0           %10d %6.1f %6.1f\n" $5 $2 $4
+
+for c in 0x0000 0x0101 0x0202 0x0404
 do
     set -- $(for i in `seq 1 $ntrials`;do
-		 $r4x16 -t -o$o $file 2>&1
-	     done | awk "$awkscript")
-    printf "r4x16   -o%-7s %10d %6.1f %6.1f\n" $o $5 $2 $4
+             $r4x16 -t -o4 -c$c $file 2>&1
+        done | awk "$awkscript")
+    printf "r4x16   -o4 -c %-4s %10d %6.1f %6.1f\n" $c $5 $2 $4
 done
 
 echo
 
 # Order-1
 set -- $(for i in `seq 1 $ntrials`;do
-	     $r4x8 -t -o1 $file 2>&1
-	 done | awk "$awkscript")
-printf "r4x8    -o1       %10d %6.1f %6.1f\n" $5 $2 $4
+             $r4x8 -t -o1 $file 2>&1
+         done | awk "$awkscript")
+printf "r4x8    -o1           %10d %6.1f %6.1f\n" $5 $2 $4
 
-for o in 1 0x605 0x1805 0x805 5
+set -- $(for i in `seq 1 $ntrials`;do
+             $r4x16 -t -o1 $file 2>&1
+         done | awk "$awkscript")
+printf "r4x16   -o1           %10d %6.1f %6.1f\n" $5 $2 $4
+
+for c in 0x0000 0x0101 0x0202 0x0404
 do
     set -- $(for i in `seq 1 $ntrials`;do
-		 $r4x16 -t -o$o $file 2>&1
-	     done | awk "$awkscript")
-    printf "r4x16   -o%-7s %10d %6.1f %6.1f\n" $o $5 $2 $4
+             $r4x16 -t -o5 -c$c $file 2>&1
+        done | awk "$awkscript")
+    printf "r4x16   -o5 -c %-4s %10d %6.1f %6.1f\n" $c $5 $2 $4
 done
