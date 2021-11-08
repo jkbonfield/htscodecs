@@ -769,8 +769,8 @@ unsigned char *rans_uncompress_O0_32x16_sse4(unsigned char *in,
 	Rv8 = _mm_blendv_epi8(Rv8, Yv8, renorm_mask8);
 
 	// Maybe just a store128 instead?
-	_mm_store_si128((__m128i *)&out[i+ 0], sv1);
-	_mm_store_si128((__m128i *)&out[i+16], sv5);
+	_mm_storeu_si128((__m128i *)&out[i+ 0], sv1);
+	_mm_storeu_si128((__m128i *)&out[i+16], sv5);
 //	*(uint64_t *)&out[i+ 0] = _mm_extract_epi64(sv1, 0);
 //	*(uint64_t *)&out[i+ 8] = _mm_extract_epi64(sv1, 1);
 //	*(uint64_t *)&out[i+16] = _mm_extract_epi64(sv5, 0);
