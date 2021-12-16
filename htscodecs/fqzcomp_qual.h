@@ -58,8 +58,9 @@ extern "C" {
  */
 typedef struct {
     int num_records;
-    uint32_t *len;    // of size num_records
-    uint32_t *flags;  // of size num_records
+    uint32_t *len;        // of size num_records
+    uint32_t *flags;      // of size num_records
+    unsigned char **seq;  // of size num_records
 } fqz_slice;
 
 
@@ -101,6 +102,7 @@ typedef struct {
     unsigned int pbits, ploc;
     unsigned int dbits, dloc;
     unsigned int sbits, sloc;
+    unsigned int bbits, bloc, boff;
 
     // models
     int max_sym, nsym, max_sel;
@@ -164,7 +166,7 @@ char *fqz_compress(int vers, fqz_slice *s, char *in, size_t in_size,
  *                      NULL on failure.
  */
 char *fqz_decompress(char *in, size_t in_size, size_t *out_size,
-                     int *lengths, int nlengths);
+                     int *lengths, int nlengths, fqz_slice *s);
 
 /** A utlity function to analyse a quality buffer to gather statistical
  *  information.  This is written into qhist and pm.  This function is only

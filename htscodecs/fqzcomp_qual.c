@@ -196,13 +196,14 @@ static int read_array(unsigned char *in, size_t in_size, unsigned int *array, in
 // FIXME: how to auto-tune these rather than trial and error?
 // r2 = READ2
 // qa = qual avg (0, 2, 4)
-static int strat_opts[][12] = {
-//   qb  qs pb ps db ds ql sl pl  dl  r2 qa
-    {10, 5, 4,-1, 2, 1, 0, 14, 10, 14, 0,-1}, // basic options (level < 7)
-    {8,  5, 7, 0, 0, 0, 0, 14, 8,  14, 1,-1}, // e.g. HiSeq 2000
-    {12, 6, 2, 0, 2, 3, 0, 9,  12, 14, 0, 0}, // e.g. MiSeq
-    {12, 6, 0, 0, 0, 0, 0, 12, 0,  0,  0, 0}, // e.g. IonTorrent; adaptive O1
-    {0,  0, 0, 0, 0, 0, 0, 0,  0,  0,  0, 0}, // custom
+static int strat_opts[][15] = {
+//   qb  qs pb ps db ds ql sl pl  dl  r2 qa  bb bl bo
+    {10, 5, 4,-1, 2, 1, 0, 14, 10, 14, 0,-1, 0, 0, 0}, // basic options (level < 7)
+    {8,  5, 7, 0, 0, 0, 0, 14, 8,  14, 1,-1, 0, 0, 0}, // e.g. HiSeq 2000
+    {12, 6, 2, 0, 2, 3, 0, 9,  12, 14, 0, 0, 0, 0, 0}, // e.g. MiSeq
+    //{12, 6, 0, 0, 0, 0, 0, 12, 0,  0,  0, 0, 0, 0}, // e.g. IonTorrent; adaptive O1
+    {6,  6, 0, 0, 0, 0, 0, 14, 0,  0,  0, 0, 8, 6, 2}, // seq context: PacBio, ONT
+    {0,  0, 0, 0, 0, 0, 0, 0,  0,  0,  0, 0, 0, 0, 0}, // custom
 };
 static int nstrats = sizeof(strat_opts) / sizeof(*strat_opts);
 
@@ -221,6 +222,7 @@ typedef struct {
     unsigned int s;     // selector
     unsigned int qtot, qlen;
     unsigned int first_len;
+    unsigned int seq;
 } fqz_state;
 
 static void dump_table(unsigned int *tab, int size, char *name) {
@@ -292,6 +294,9 @@ static void dump_params(fqz_gparams *gp) {
 	fprintf(stderr, "\tsloc\t%d\n",    pm->sloc);
 	fprintf(stderr, "\tploc\t%d\n",    pm->ploc);
 	fprintf(stderr, "\tdloc\t%d\n",    pm->dloc);
+	fprintf(stderr, "\tbbits\t%d\n",   pm->bbits);
+	fprintf(stderr, "\tbloc\t%d\n",    pm->bloc);
+	fprintf(stderr, "\tboff\t%d\n",    pm->boff);
 
 	if (pm->pflags & PFLAG_HAVE_QMAP)
 	    dump_map(pm->qmap, 256, "qmap");
@@ -364,7 +369,8 @@ static void fqz_destroy_models(fqz_model *m) {
 #endif
 }
 
-static inline unsigned int fqz_update_ctx(fqz_param *pm, fqz_state *state, int q) {
+static inline unsigned int fqz_update_ctx(fqz_param *pm, fqz_state *state,
+					  int q, int base) {
     unsigned int last = 0; // pm->context
     state->qctx = (state->qctx << pm->qshift) + pm->qtab[q];
     last += (state->qctx & pm->qmask) << pm->qloc;
@@ -372,7 +378,12 @@ static inline unsigned int fqz_update_ctx(fqz_param *pm, fqz_state *state, int q
     // The final shifts have been factored into the tables already.
     last += pm->ptab[MIN(1023, state->p)];      // << pm->ploc
     last += pm->dtab[MIN(255,  state->delta)];  // << pm->dloc
+    state->seq = ((state->seq << 2) | base) & ((1<<pm->bbits)-1);
+//    fprintf(stderr, "seq=%x\n", state->seq);
+    last += state->seq << pm->bloc;
     last += state->s << pm->sloc;
+
+    //fprintf(stderr, "%c %c\n", "ACGT"[state->seq & 3], q+33);
 
     // On the fly average is slow work.
     // However it can be slightly better than using a selector bit
@@ -706,6 +717,8 @@ int fqz_store_parameters1(fqz_param *pm, unsigned char *comp) {
     comp[comp_idx++] = (pm->qbits<<4)|pm->qshift;
     comp[comp_idx++] = (pm->qloc<<4)|pm->sloc;
     comp[comp_idx++] = (pm->ploc<<4)|pm->dloc;
+    comp[comp_idx++] = (pm->bbits<<4)|pm->bloc;
+    comp[comp_idx++] = (pm->boff<<4);
 
     if (pm->store_qmap) {
 	for (i = j = 0; i < 256; i++)
@@ -798,6 +811,9 @@ int fqz_pick_parameters(fqz_gparams *gp,
     pm->sloc   = strat_opts[strat][7];
     pm->ploc   = strat_opts[strat][8];
     pm->dloc   = strat_opts[strat][9];
+    pm->bbits  = strat_opts[strat][12];
+    pm->bloc   = strat_opts[strat][13];
+    pm->boff   = strat_opts[strat][14];
 
     // Params for controlling behaviour here.
     pm->do_r2 = strat_opts[strat][10];
@@ -958,6 +974,14 @@ unsigned char *compress_block_fqz2f(int vers,
 				    fqz_gparams *gp) {
     fqz_gparams local_gp;
     int free_params = 0;
+    unsigned char *seq = NULL, *seq_end = NULL;
+
+    int L[256] = {0};
+    L['A'] = L['a'] = 0;
+    L['C'] = L['c'] = 1;
+    L['G'] = L['g'] = 2;
+    L['T'] = L['t'] = 3;
+    L['U'] = L['u'] = 3;
 
     unsigned int last = 0;
     size_t i, j;
@@ -980,7 +1004,14 @@ unsigned char *compress_block_fqz2f(int vers,
 	free_params = 1;
     }
 
-    //dump_params(gp);
+    if (!s->seq || !s->seq[0]) {
+	for (j = 0; j < gp->nparam; j++) {
+	    fqz_param *pm = &gp->p[j];
+	    pm->bbits = pm->bloc = 0;
+	}
+    }
+
+    dump_params(gp);
     comp_idx = var_put_u32(comp, compe, in_size);
     comp_idx += fqz_store_parameters(gp, comp+comp_idx);
 
@@ -1073,8 +1104,6 @@ unsigned char *compress_block_fqz2f(int vers,
 		//fprintf(stderr, "Rev %d\n", (s->flags[rec] & FQZ_FREVERSE) ? 1 : 0);
 	    }
 
-	    rec++;
-
 	    state.qtot = 0;
 	    state.qlen = 0;
 
@@ -1084,6 +1113,16 @@ unsigned char *compress_block_fqz2f(int vers,
 	    state.qctx = 0;
 	    state.prevq = 0;
 
+	    if (s->seq && s->seq[rec]) {
+		seq = s->seq[rec]+pm->boff;
+		seq_end = s->seq[rec] + len;
+		state.seq = (L[s->seq[rec][0]]<<2)+L[s->seq[rec][1]];
+	    } else {
+		seq = seq_end = NULL;
+		state.seq = 0;
+	    }
+
+	    rec++;
 	    last = pm->context;
 
 	    if (pm->do_dedup) {
@@ -1105,11 +1144,15 @@ unsigned char *compress_block_fqz2f(int vers,
 
 	unsigned char q = in[i];
 	unsigned char qm = pm->qmap[q];
+	int base = seq ? L[*seq++] : 0;
 
+	//last = ((last<<2) + base) & 0x3f;
+	//fprintf(stderr, "%d\t%d\t%.3s\t%02x\n", state.p, q, &seq[i]-1, last);
 	SIMPLE_MODEL(QMAX,_encodeSymbol)(&model.qual[last], &rc, qm);
 	//fprintf(stderr, "Sym %d with ctx %04x delta %d prevq %d q %d\n", qm, last, state.delta, state.prevq, qm);
 	//fprintf(stderr, "pos=%d, delta=%d\n", state.p, state.delta);
-	last = fqz_update_ctx(pm, &state, qm);
+	last = fqz_update_ctx(pm, &state, qm, base);
+	//state.p--;
     }
 
     RC_FinishEncode(&rc);
@@ -1190,6 +1233,9 @@ int fqz_read_parameters1(fqz_param *pm, unsigned char *in, size_t in_size) {
     pm->sloc       = in[in_idx++]&15;
     pm->ploc       = in[in_idx]>>4;
     pm->dloc       = in[in_idx++]&15;
+    pm->bbits      = in[in_idx]>>4;
+    pm->bloc       = in[in_idx++]&15;
+    pm->boff       = in[in_idx++]>>4;
 
     // Maps and tables
     if (pm->store_qmap) {
@@ -1294,6 +1340,14 @@ unsigned char *uncompress_block_fqz2f(fqz_slice *s,
     char *rev_a = NULL;
     int *len_a = NULL;
     memset(&gp, 0, sizeof(gp));
+    unsigned char *seq = NULL, *seq_end = NULL;
+
+    int L[256] = {0};
+    L['A'] = L['a'] = 0;
+    L['C'] = L['c'] = 1;
+    L['G'] = L['g'] = 2;
+    L['T'] = L['t'] = 3;
+    L['U'] = L['u'] = 3;
 
     uint32_t len;
     ssize_t i, rec = 0, in_idx;
@@ -1312,7 +1366,7 @@ unsigned char *uncompress_block_fqz2f(fqz_slice *s,
     // Decode parameter blocks
     if ((i = fqz_read_parameters(&gp, in+in_idx, in_size-in_idx)) < 0)
 	return NULL;
-    //dump_params(&gp);
+    dump_params(&gp);
     in_idx += i;
 
     // Optimisations to remove shifts from main loop
@@ -1369,7 +1423,7 @@ unsigned char *uncompress_block_fqz2f(fqz_slice *s,
 
 	if (state.p == 0) {
 	    // New record
-	    if (pm->do_sel) {
+	    if (pm->do_sel || (gp.gflags & GFLAG_MULTI_PARAM)) {
 		state.s = SIMPLE_MODEL(256,_decodeSymbol)(&model.sel, &rc);
 		//fprintf(stderr, "State %d\n", state.s);
 	    } else {
@@ -1419,14 +1473,22 @@ unsigned char *uncompress_block_fqz2f(fqz_slice *s,
 		}
 	    }
 
-	    rec++;
-
 	    state.p = len;
 	    state.add_d = 0;
 	    state.delta = 0;
 	    state.prevq = 0;
 	    state.qctx = 0;
 
+	    if (s && s->seq && s->seq[rec]) {
+		seq = s->seq[rec]+pm->boff;
+		seq_end = s->seq[rec] + len;
+		state.seq = (L[s->seq[rec][0]]<<2)+L[s->seq[rec][1]];
+	    } else {
+		seq = seq_end = NULL;
+		state.seq = 0;
+	    }
+
+	    rec++;
 	    last = pm->context;
 	}
 
@@ -1437,7 +1499,8 @@ unsigned char *uncompress_block_fqz2f(fqz_slice *s,
         uncomp[i] = q;
 
 	// Compute new quality context
-	last = fqz_update_ctx(pm, &state, Q);
+	int base = seq ? L[*seq++] : 0;
+	last = fqz_update_ctx(pm, &state, Q, base);
     }
 
     if (rec >= nrec) {
@@ -1496,7 +1559,7 @@ char *fqz_compress(int vers, fqz_slice *s, char *in, size_t uncomp_size,
 }
 
 char *fqz_decompress(char *in, size_t comp_size, size_t *uncomp_size,
-		     int *lengths, int nlengths) {
-    return (char *)uncompress_block_fqz2f(NULL, (unsigned char *)in,
+		     int *lengths, int nlengths, fqz_slice *s) {
+    return (char *)uncompress_block_fqz2f(s, (unsigned char *)in,
 					  comp_size, uncomp_size, lengths, nlengths);
 }
