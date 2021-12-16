@@ -60,19 +60,24 @@
 
 static fqz_slice fixed_slice = {0};
 
-fqz_slice *fake_slice(size_t buf_len, int *len, int *r2, int *sel, int nlen) {
-    fixed_slice.num_records = (nlen == 1) ? (buf_len+len[0]-1) / len[0] : nlen;
+fqz_slice *fake_slice(size_t buf_len, int *len, int *r2, int *sel, int nlen,
+		      unsigned char *seq, int *seq_idx) {
+    fixed_slice.num_records = (nlen == 1 && len)
+	? (buf_len+len[0]-1) / len[0] : nlen;
     assert(fixed_slice.num_records <= MAX_REC);
     int i;
     if (!fixed_slice.len)
         fixed_slice.len = malloc(MAX_REC * sizeof(*fixed_slice.len));
     if (!fixed_slice.flags)
         fixed_slice.flags = malloc(MAX_REC * sizeof(*fixed_slice.flags));
+    if (!fixed_slice.seq)
+        fixed_slice.seq = malloc(MAX_REC * sizeof(*fixed_slice.seq));
     for (i = 0; i < fixed_slice.num_records; i++) {
         int idx = i < nlen ? i : nlen-1;
-        fixed_slice.len[i] = len[idx];
+        fixed_slice.len[i] = len ? len[idx] : 0;
         fixed_slice.flags[i] = r2 ? r2[idx]*FQZ_FREAD2 : 0;
         fixed_slice.flags[i] |= sel ? (sel[idx]<<16) : 0;
+        fixed_slice.seq[i] = seq_idx ? seq + seq_idx[i] : NULL;
     }
 
     return &fixed_slice;
@@ -112,6 +117,9 @@ int fqz_manual_parameters(fqz_gparams *gp,
         fqz_param *pm = &gp->p[p];
         uint64_t st = manual_strats[p];
 
+        pm->boff   = st & 15; st >>= 4;
+        pm->bloc   = st & 15; st >>= 4;
+        pm->bbits  = st & 15; st >>= 4;
         pm->do_qa  = st & 15; st >>= 4;
         pm->do_r2  = st & 15; st >>= 4;
         pm->dloc   = st & 15; st >>= 4;
@@ -176,17 +184,64 @@ int fqz_manual_parameters(fqz_gparams *gp,
         if (pm->qbits) {
             for (i = 0; i < 256; i++) {
                 pm->qtab[i] = i; // 1:1
+                //pm->qtab[i] = (1<<pm->qshift)-i; // 1:1
+                //pm->qtab[i] = i/4;
+                //pm->qtab[i] = ((1<<pm->qshift)-i)/3;
 
                 // Alternative mappings:
                 //qtab[i] = i > 30 ? MIN(max_sym,i)-15 : i/2;  // eg for 9827 BAM
             }
+#if 0
+            // qtab for PacBio CCS data; saves 3%
+            for (i='~'-33; i<256; i++) {
+                pm->qtab[i] = 24+i-('~'-33);
+            }
 
+            int x = 0;
+            for (i = 0; i < 1; i++)
+                pm->qtab[i] = x,x++;
+            for (;i < '~'-33; i++)
+                //pm->qtab[i] = x,x+=(i%4==0);
+                pm->qtab[i] = x,x+=(i%4==0);
+            x++;
+            for (;i <= '~'-33; i++)
+                pm->qtab[i] = x,x++;
+            for (;i < 256; i++)
+                pm->qtab[i] = x,x+=(i%4==0);
+#endif
+
+//          for (i = 0; i < 128; i++) {
+//              for (x = i+1; x < 128; x++) {
+//                  if (pm->qtab[i] != pm->qtab[x])
+//                      break;
+//              }
+//              x--;
+//              if (i==x)
+//                  fprintf(stderr, "%d:%d ", pm->qtab[i], i);
+//              else {
+//                  fprintf(stderr, "%d:%d-%d ", pm->qtab[i], i, x);
+//                  i=x;
+//              }
+//          }
+//          fprintf(stderr, "\n");
+
+            //pm->qtab['~'-33]=32;
+
+            // pm->use_qtab = 1;
+//          for (i = 0; i <= 2 ; i++) pm->qtab[i] = 0;
+//          for (     ; i <= 12; i++) pm->qtab[i] = 1;
+//          for (     ; i <= 18; i++) pm->qtab[i] = 2;
+//          for (     ; i <= 36; i++) pm->qtab[i] = 3;
         }
+        //pm->use_qtab = 0;
         pm->qmask = (1<<pm->qbits)-1;
 
         if (pm->pbits) {
             for (i = 0; i < 1024; i++)
                 pm->ptab[i] = MIN((1<<pm->pbits)-1, i>>pm->pshift);
+
+//          for (i = 0; i < 1024; i++)
+//              pm->ptab[i] = MIN((1<<pm->pbits)-1, i < 10 ? i : 10 + i/3);
 
             // Alternatively via analysis of quality distributions we
             // may select a bunch of positions that are special and
@@ -232,7 +287,7 @@ static unsigned char *load(char *fn, size_t *lenp) {
 #endif
 
     int fd = open(fn, O_RDONLY | _O_BINARY);
-    if (!fd) {
+    if (fd < 0) {
         perror(fn);
         return NULL;
     }
@@ -311,12 +366,27 @@ void parse_lines(unsigned char *in, size_t len,
             in[j++] = in[i]-33; // ASCII phred to qual
         }
     }
+
     *new_len = j;
 }
 
+void parse_seq(unsigned char *seq, int *seq_idx, int nrec) {
+    int i, j;
+    if (!seq)
+        return;
+
+    for (i = j = 0; i < nrec; i++) {
+        seq_idx[i] = j;
+        while (seq[j] != '\n')
+            j++;
+        j++;
+    }
+}
+
+
 int main(int argc, char **argv) {
-    unsigned char *in, *out;
-    size_t in_len, out_len;
+    unsigned char *in, *out, *seq;
+    size_t in_len, out_len, seq_len;
     int decomp = 0, vers = 4;  // CRAM version 4.0 (4) or 3.1 (3)
     int strat = 0, raw = 0;
     fqz_gparams *gp = NULL, gp_local;
@@ -370,15 +440,32 @@ int main(int argc, char **argv) {
         }
     }
 
-    in = load(optind < argc ? argv[optind] : "/dev/stdin", &in_len);
+    in = load(optind < argc
+              ? (strcmp(argv[optind], "-") ? argv[optind] : "/dev/stdin")
+              : "/dev/stdin", &in_len);
     if (!in)
         exit(1);
+
+    if (++optind < argc)
+        seq = load(argv[optind], &seq_len);
+    else
+        seq = NULL;
 
     if (raw)
         blk_size = in_len;
 
     // Block based, for arbitrary sizes of input
     if (decomp) {
+        fqz_slice *s = NULL;
+
+        if (seq) {
+            int nlines = count_lines(seq, seq_len);
+            int *seq_idx = calloc(nlines, sizeof(*seq_idx));
+            parse_seq(seq, seq_idx, nlines);
+
+            s = fake_slice(0, NULL, NULL, NULL, nlines, seq, seq_idx);
+        }
+
         unsigned char *in2 = in;
         while (in_len > 0) {
             // Read sizes as 32-bit
@@ -396,7 +483,7 @@ int main(int argc, char **argv) {
             fprintf(stderr, "out_len %ld, in_len %ld\n", (long)out_len, (long)in2_len);
 
             int *lengths = malloc(MAX_REC * sizeof(int));
-            out = (unsigned char *)fqz_decompress((char *)in2, in_len-(raw?0:8), &out_len, lengths, MAX_REC);
+            out = (unsigned char *)fqz_decompress((char *)in2, in_len-(raw?0:8), &out_len, lengths, MAX_REC, s);
             if (!out) {
                 fprintf(stderr, "Failed to decompress\n");
                 return 1;
@@ -429,7 +516,10 @@ int main(int argc, char **argv) {
         int *rec_len = calloc(nlines, sizeof(*rec_len));
         int *rec_r2  = calloc(nlines, sizeof(*rec_r2));
         int *rec_sel = calloc(nlines, sizeof(*rec_sel));
+        int *seq_idx = calloc(nlines, sizeof(*seq_idx));
         parse_lines(in, in_len, rec_len, rec_r2, rec_sel, &in_len);
+        if (seq)
+            parse_seq(seq, seq_idx, nlines);
 
         unsigned char *in2 = in;
         long t_out = 0;
@@ -437,7 +527,8 @@ int main(int argc, char **argv) {
         while (in_len > 0) {
             // FIXME: blk_size no longer working in test.  One cycle only!
             size_t in2_len = in_len <= blk_size ? in_len : blk_size;
-            fqz_slice *s = fake_slice(in2_len, rec_len, rec_r2, rec_sel, nlines);
+            fqz_slice *s = fake_slice(in2_len, rec_len, rec_r2, rec_sel,
+                                      nlines, seq, seq_idx);
             if (gp == &gp_local)
                 if (fqz_manual_parameters(gp, s, in2, in2_len) < 0)
                     return 1;
