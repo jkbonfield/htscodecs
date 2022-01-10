@@ -184,17 +184,64 @@ int fqz_manual_parameters(fqz_gparams *gp,
 	if (pm->qbits) {
 	    for (i = 0; i < 256; i++) {
 		pm->qtab[i] = i; // 1:1
+		//pm->qtab[i] = (1<<pm->qshift)-i; // 1:1
+		//pm->qtab[i] = i/4;
+		//pm->qtab[i] = ((1<<pm->qshift)-i)/3;
 
 		// Alternative mappings:
 		//qtab[i] = i > 30 ? MIN(max_sym,i)-15 : i/2;  // eg for 9827 BAM
 	    }
+#if 0
+	    // qtab for PacBio CCS data; saves 3%
+	    for (i='~'-33; i<256; i++) {
+		pm->qtab[i] = 24+i-('~'-33);
+	    }
 
+	    int x = 0;
+	    for (i = 0; i < 1; i++)
+		pm->qtab[i] = x,x++;
+	    for (;i < '~'-33; i++)
+		//pm->qtab[i] = x,x+=(i%4==0);
+		pm->qtab[i] = x,x+=(i%4==0);
+	    x++;
+	    for (;i <= '~'-33; i++)
+		pm->qtab[i] = x,x++;
+	    for (;i < 256; i++)
+		pm->qtab[i] = x,x+=(i%4==0);
+#endif
+
+//	    for (i = 0; i < 128; i++) {
+//		for (x = i+1; x < 128; x++) {
+//		    if (pm->qtab[i] != pm->qtab[x])
+//			break;
+//		}
+//		x--;
+//		if (i==x)
+//		    fprintf(stderr, "%d:%d ", pm->qtab[i], i);
+//		else {
+//		    fprintf(stderr, "%d:%d-%d ", pm->qtab[i], i, x);
+//		    i=x;
+//		}
+//	    }
+//	    fprintf(stderr, "\n");
+
+	    //pm->qtab['~'-33]=32;
+
+	    // pm->use_qtab = 1;
+//	    for (i = 0; i <= 2 ; i++) pm->qtab[i] = 0;
+//	    for (     ; i <= 12; i++) pm->qtab[i] = 1;
+//	    for (     ; i <= 18; i++) pm->qtab[i] = 2;
+//	    for (     ; i <= 36; i++) pm->qtab[i] = 3;
 	}
+	//pm->use_qtab = 0;
 	pm->qmask = (1<<pm->qbits)-1;
 
 	if (pm->pbits) {
 	    for (i = 0; i < 1024; i++)
 		pm->ptab[i] = MIN((1<<pm->pbits)-1, i>>pm->pshift);
+
+//	    for (i = 0; i < 1024; i++)
+//		pm->ptab[i] = MIN((1<<pm->pbits)-1, i < 10 ? i : 10 + i/3);
 
 	    // Alternatively via analysis of quality distributions we
 	    // may select a bunch of positions that are special and

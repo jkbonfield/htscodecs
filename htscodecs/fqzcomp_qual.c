@@ -202,7 +202,8 @@ static int strat_opts[][15] = {
     {8,  5, 7, 0, 0, 0, 0, 14, 8,  14, 1,-1, 0, 0, 0}, // e.g. HiSeq 2000
     {12, 6, 2, 0, 2, 3, 0, 9,  12, 14, 0, 0, 0, 0, 0}, // e.g. MiSeq
     //{12, 6, 0, 0, 0, 0, 0, 12, 0,  0,  0, 0, 0, 0}, // e.g. IonTorrent; adaptive O1
-    {6,  6, 0, 0, 0, 0, 0, 14, 0,  0,  0, 0, 8, 6, 2}, // seq context: PacBio, ONT
+    //{6,  6, 0, 0, 0, 0, 0, 14, 0,  0,  0, 0, 8, 6, 2}, // seq context: PacBio, ONT
+    {7,  7, 0, 0, 0, 0, 0, 14, 0,  0,  0, 7, 7, 7, 2}, // seq context: PacBio, ONT
     {0,  0, 0, 0, 0, 0, 0, 0,  0,  0,  0, 0, 0, 0, 0}, // custom
 };
 static int nstrats = sizeof(strat_opts) / sizeof(*strat_opts);
@@ -290,6 +291,10 @@ static void dump_params(fqz_gparams *gp) {
 	fprintf(stderr, "\tmax_sym\t%d\n",  pm->max_sym);
 	fprintf(stderr, "\tqbits\t%d\n",   pm->qbits);
 	fprintf(stderr, "\tqshift\t%d\n",  pm->qshift);
+	fprintf(stderr, "\tpbits\t%d\n",   pm->pbits);
+	fprintf(stderr, "\tpshift\t%d\n",  pm->pshift);
+	fprintf(stderr, "\tdbits\t%d\n",   pm->dbits);
+	fprintf(stderr, "\tdshift\t%d\n",  pm->dshift);
 	fprintf(stderr, "\tqloc\t%d\n",    pm->qloc);
 	fprintf(stderr, "\tsloc\t%d\n",    pm->sloc);
 	fprintf(stderr, "\tploc\t%d\n",    pm->ploc);
@@ -1008,6 +1013,13 @@ unsigned char *compress_block_fqz2f(int vers,
 	for (j = 0; j < gp->nparam; j++) {
 	    fqz_param *pm = &gp->p[j];
 	    pm->bbits = pm->bloc = 0;
+	}
+	gp->gflags &= ~GFLAG_USE_SEQ;
+    } else {
+	for (j = 0; j < gp->nparam; j++) {
+	    fqz_param *pm = &gp->p[j];
+	    if (pm->bbits)
+		gp->gflags |= GFLAG_USE_SEQ;
 	}
     }
 

@@ -68,6 +68,7 @@ typedef struct {
 static const int GFLAG_MULTI_PARAM = 1;
 static const int GFLAG_HAVE_STAB   = 2;
 static const int GFLAG_DO_REV      = 4;
+static const int GFLAG_USE_SEQ     = 8;
 
 // Param flags
 // Add PFLAG_HAVE_DMAP and a dmap[] for delta incr?
