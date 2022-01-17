@@ -709,7 +709,8 @@ void fqz_qual_stats(fqz_slice *s,
 }
 
 static inline
-int fqz_store_parameters1(fqz_param *pm, unsigned char *comp) {
+int fqz_store_parameters1(fqz_gparams *gp, fqz_param *pm,
+			  unsigned char *comp) {
     int comp_idx = 0, i, j;
 
     // Starting context
@@ -722,8 +723,11 @@ int fqz_store_parameters1(fqz_param *pm, unsigned char *comp) {
     comp[comp_idx++] = (pm->qbits<<4)|pm->qshift;
     comp[comp_idx++] = (pm->qloc<<4)|pm->sloc;
     comp[comp_idx++] = (pm->ploc<<4)|pm->dloc;
-    comp[comp_idx++] = (pm->bbits<<4)|pm->bloc;
-    comp[comp_idx++] = (pm->boff<<4);
+
+    if (gp->gflags & GFLAG_USE_SEQ) {
+	comp[comp_idx++] = (pm->bbits<<4)|pm->bloc;
+	comp[comp_idx++] = (pm->boff<<4);
+    }
 
     if (pm->store_qmap) {
 	for (i = j = 0; i < 256; i++)
@@ -763,7 +767,7 @@ int fqz_store_parameters(fqz_gparams *gp, unsigned char *comp) {
 
     int i;
     for (i = 0; i < gp->nparam; i++)
-	comp_idx += fqz_store_parameters1(&gp->p[i], comp+comp_idx);
+	comp_idx += fqz_store_parameters1(gp, &gp->p[i], comp+comp_idx);
 
     //fprintf(stderr, "Encoded %d bytes of param\n", comp_idx);
     return comp_idx;
@@ -799,9 +803,6 @@ int fqz_pick_parameters(fqz_gparams *gp,
     gp->nparam = 1;
     gp->max_sel = 0;
 
-    if (vers == 3) // V3.0 doesn't store qual in original orientation
-	gp->gflags |= GFLAG_DO_REV;
-
     fqz_param *pm = gp->p;
 
     // Programmed strategies, which we then amend based on our
@@ -819,6 +820,10 @@ int fqz_pick_parameters(fqz_gparams *gp,
     pm->bbits  = strat_opts[strat][12];
     pm->bloc   = strat_opts[strat][13];
     pm->boff   = strat_opts[strat][14];
+
+    if (vers == 3 && pm->bbits == 0)
+	// V3.0 doesn't store qual in original orientation
+	gp->gflags |= GFLAG_DO_REV;
 
     // Params for controlling behaviour here.
     pm->do_r2 = strat_opts[strat][10];
@@ -1023,7 +1028,7 @@ unsigned char *compress_block_fqz2f(int vers,
 	}
     }
 
-    dump_params(gp);
+    //dump_params(gp);
     comp_idx = var_put_u32(comp, compe, in_size);
     comp_idx += fqz_store_parameters(gp, comp+comp_idx);
 
@@ -1128,7 +1133,10 @@ unsigned char *compress_block_fqz2f(int vers,
 	    if (s->seq && s->seq[rec]) {
 		seq = s->seq[rec]+pm->boff;
 		seq_end = s->seq[rec] + len;
-		state.seq = (L[s->seq[rec][0]]<<2)+L[s->seq[rec][1]];
+
+		int b;
+		for (state.seq = b = 0; b < pm->boff; b++)
+		    state.seq = (state.seq<<2) | L[s->seq[rec][b]];
 	    } else {
 		seq = seq_end = NULL;
 		state.seq = 0;
@@ -1156,7 +1164,7 @@ unsigned char *compress_block_fqz2f(int vers,
 
 	unsigned char q = in[i];
 	unsigned char qm = pm->qmap[q];
-	int base = seq ? L[*seq++] : 0;
+	int base = seq && seq < seq_end ? L[*seq++] : 0;
 
 	//last = ((last<<2) + base) & 0x3f;
 	//fprintf(stderr, "%d\t%d\t%.3s\t%02x\n", state.p, q, &seq[i]-1, last);
@@ -1215,9 +1223,12 @@ unsigned char *compress_block_fqz2f(int vers,
 // Returns number of bytes read on success,
 //         -1 on failure.
 static inline
-int fqz_read_parameters1(fqz_param *pm, unsigned char *in, size_t in_size) {
+int fqz_read_parameters1(fqz_gparams *gp, fqz_param *pm,
+			 unsigned char *in, size_t in_size) {
     int in_idx = 0;
     size_t i;
+
+    memset(pm, 0, sizeof(*pm)); // for purposes of dump_params
 
     if (in_size < 7)
 	return -1;
@@ -1245,9 +1256,16 @@ int fqz_read_parameters1(fqz_param *pm, unsigned char *in, size_t in_size) {
     pm->sloc       = in[in_idx++]&15;
     pm->ploc       = in[in_idx]>>4;
     pm->dloc       = in[in_idx++]&15;
-    pm->bbits      = in[in_idx]>>4;
-    pm->bloc       = in[in_idx++]&15;
-    pm->boff       = in[in_idx++]>>4;
+
+    if (gp->gflags & GFLAG_USE_SEQ) {
+	pm->bbits      = in[in_idx]>>4;
+	pm->bloc       = in[in_idx++]&15;
+	pm->boff       = in[in_idx++]>>4;
+    } else {
+	pm->bbits = 0;
+	pm->bloc = 0;
+	pm->boff = 0;
+    }
 
     // Maps and tables
     if (pm->store_qmap) {
@@ -1322,7 +1340,8 @@ int fqz_read_parameters(fqz_gparams *gp, unsigned char *in, size_t in_size) {
 
     gp->max_sym = 0;
     for (i = 0; i < gp->nparam; i++) {
-	int e = fqz_read_parameters1(&gp->p[i], in + in_idx, in_size-in_idx);
+	int e = fqz_read_parameters1(gp, &gp->p[i], in + in_idx,
+				     in_size-in_idx);
 	if (e < 0)
 	    goto err;
 	in_idx += e;
@@ -1378,7 +1397,7 @@ unsigned char *uncompress_block_fqz2f(fqz_slice *s,
     // Decode parameter blocks
     if ((i = fqz_read_parameters(&gp, in+in_idx, in_size-in_idx)) < 0)
 	return NULL;
-    dump_params(&gp);
+    //dump_params(&gp);
     in_idx += i;
 
     // Optimisations to remove shifts from main loop
@@ -1492,9 +1511,12 @@ unsigned char *uncompress_block_fqz2f(fqz_slice *s,
 	    state.qctx = 0;
 
 	    if (s && s->seq && s->seq[rec]) {
-		seq = s->seq[rec]+pm->boff;
+		seq = s->seq[rec]+pm->boff; // causes overflow and error
 		seq_end = s->seq[rec] + len;
-		state.seq = (L[s->seq[rec][0]]<<2)+L[s->seq[rec][1]];
+
+		int b;
+		for (state.seq = b = 0; b < pm->boff; b++)
+		    state.seq = (state.seq<<2) | L[s->seq[rec][b]];
 	    } else {
 		seq = seq_end = NULL;
 		state.seq = 0;
@@ -1511,7 +1533,7 @@ unsigned char *uncompress_block_fqz2f(fqz_slice *s,
         uncomp[i] = q;
 
 	// Compute new quality context
-	int base = seq ? L[*seq++] : 0;
+	int base = seq && seq < seq_end ? L[*seq++] : 0;
 	last = fqz_update_ctx(pm, &state, Q, base);
     }
 
