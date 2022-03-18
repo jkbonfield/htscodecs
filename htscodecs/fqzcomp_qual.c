@@ -78,19 +78,28 @@
 #  define MAX(a,b) ((a)>(b)?(a):(b))
 #endif
 
-#define QMAX 256
 #define QBITS 12
 #define QSIZE (1<<QBITS)
 
+#define QMAX 96
+#define NSYM QMAX
+#include "c_simple_model.h"
+#undef NSYM
+
+// Consider this for NovaSeq.  It's only 5% quicker, but is much lower
+// memory.
+//#define QMAX2 5
+//#define NSYM QMAX2
+//#include "c_simple_model.h"
+//#undef NSYM
+
 #define NSYM 2
 #include "c_simple_model.h"
+#undef NSYM
 
 #undef NSYM
-#define NSYM QMAX
-//#include "c_escape_model.h"
+#define NSYM 256
 #include "c_simple_model.h"
-//#include "c_cdf_model.h"
-//#include "c_cdf16_model.h"
 
 // An array of 0,0,0, 1,1,1,1, 3, 5,5
 // is turned into a run-length of 3x0, 4x1, 0x2, 1x4, 0x4, 2x5,
@@ -196,10 +205,12 @@ static int strat_opts[][15] = {
 //   qb  qs pb ps db ds ql sl pl  dl  r2 qa  bb bl bo
     {10, 5, 4,-1, 2, 1, 0, 14, 10, 14, 0,-1, 0, 0, 0}, // basic options (level < 7)
     {8,  5, 7, 0, 0, 0, 0, 14, 8,  14, 1,-1, 0, 0, 0}, // e.g. HiSeq 2000
-    {12, 6, 2, 0, 2, 3, 0, 9,  12, 14, 0, 0, 0, 0, 0}, // e.g. MiSeq
-    //{12, 6, 0, 0, 0, 0, 0, 12, 0,  0,  0, 0, 0, 0}, // e.g. IonTorrent; adaptive O1
-    //{6,  6, 0, 0, 0, 0, 0, 14, 0,  0,  0, 0, 8, 6, 2}, // seq context: PacBio, ONT
-    {7,  7, 0, 0, 0, 0, 0, 14, 0,  0,  0, 7, 7, 7, 2}, // seq context: PacBio, ONT
+  //{12, 6, 3, 4, 3, 0, 6,  0, 3,   0, 0, 0, 0, 0, 0}, // e.g. MiSeq
+  //{10, 5, 0, 0, 0, 0, 0, 0, 0,  0, 0, 0, 6, 10, 2}, // ONT; 75215941
+    {8, 4, 0, 0, 0, 0, 0, 0, 0,  0, 0, 0, 8, 8, 2}, // ONT; 73979209
+  //{12, 6, 0, 0, 0, 0, 0, 12, 0,  0,  0, 0, 0, 0}, // e.g. IonTorrent; adaptive O1
+  //{6,  6, 0, 0, 0, 0, 0, 14, 0,  0,  0, 0, 8, 6, 2}, // seq context: PacBio, ONT
+    {6,  6, 0, 0, 0, 0, 0, 0,  0,  0,  0, 0,10, 6, 3}, // seq context: PacBio, ONT
     {0,  0, 0, 0, 0, 0, 0, 0,  0,  0,  0, 0, 0, 0, 0}, // custom
 };
 static int nstrats = sizeof(strat_opts) / sizeof(*strat_opts);
@@ -395,7 +406,6 @@ static inline unsigned int fqz_update_ctx(fqz_param *pm, fqz_state *state,
 
     return last & (CTX_SIZE-1);
 }
-
 
 // Build quality stats for qhist and set nsym, do_dedup and do_sel params.
 // One_param is -1 to gather stats on all data, or >= 0 to gather data
@@ -885,10 +895,45 @@ int fqz_pick_parameters(fqz_gparams *gp,
             pm->qtab[i] = i; // 1:1
 
             // Alternative mappings:
-            //qtab[i] = i > 30 ? MIN(max_sym,i)-15 : i/2;  // eg for 9827 BAM
+            //pm->qtab[i] = i > 30 ? MIN(pm->max_sym,i)-15 : i/2;  // eg for 9827 BAM
         }
 
     }
+
+    // PB CLR is best as-is without this code, as is ONT.
+    if (qhist['~'-'!']*2 > in_size && strat == 3) {
+        // HiFi where qual ~ is dominant.
+        pm->use_qtab = 1;
+        int n;
+        for (i = n = 0; i < 256; i++) {
+            if (i=='~'-'!') n++;
+            else if (i=='~'-'!'+1 || i%16==0) n++;
+            pm->qtab[i] = n;
+            //fprintf(stderr, "%d\t%d\n", i, n);
+        }
+
+        // default for Q3 was 6/6 and 10/7/3
+        //pm->qbits = 6; pm->qshift = 3;
+        //pm->bbits = 10; pm->bloc = 6; pm->boff = 3;
+        // SRR12121586.100k.fq 774038602 to  184003615
+
+        pm->qbits = 9; pm->qshift = 3;
+        pm->bbits = 6; pm->bloc = 9; pm->boff = 2;
+        // SRR12121586.100k.fq 774038602 to  181705946
+    }
+
+    // ONT qtab; can reduce space a bit further; maybe 2%.
+    // We may need to optimise this more for varying ONT quality.
+    if (strat==2) {
+        pm->use_qtab = 1;
+        int n = 0;
+        for (i = n = 0; i < 256; i++) {
+            pm->qtab[i] = n++;
+            if (i<1)n--;
+            if (i>=15) n--;
+        }
+    }
+
     pm->qmask = (1<<pm->qbits)-1;
 
     if (pm->pbits) {
@@ -1584,3 +1629,4 @@ char *fqz_decompress(char *in, size_t comp_size, size_t *uncomp_size,
     return (char *)uncompress_block_fqz2f(s, (unsigned char *)in,
                                           comp_size, uncomp_size, lengths, nlengths);
 }
+ 
