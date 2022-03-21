@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012, 2018-2019 Genome Research Ltd.
+ * Copyright (c) 2012, 2018-2019, 2022 Genome Research Ltd.
  * Author(s): James Bonfield
  *
  * Redistribution and use in source and binary forms, with or without
@@ -31,6 +31,11 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
+/*
+ * A specialised version of c_simple_model for small numbers of symbols.
+ * This doesn't have the symbol sorting and simply has a direct lookup.
+ */
+
 #include <stdint.h>
 #include "c_range_coder.h"
 
@@ -57,128 +62,92 @@
 
 //-----------------------------------------------------------------------------
 // Bits we want included once only - constants, types, etc
-#ifndef C_SIMPLE_MODEL_H
-#define C_SIMPLE_MODEL_H
+#ifndef C_SMALL_MODEL_H
+#define C_SMALL_MODEL_H
 
-#ifndef MAX_FREQ
-#    define MAX_FREQ (1<<16)-17
+// MAX_FREQ of 255 permits us to use uint8_t for the frequencies, further
+// reducing the model size.  Combined with low NSYM this makes prefetch
+// particularly good at precching upcoming multiple models.
+#ifdef MAX_FREQ
+#  undef MAX_FREQ
 #endif
 #define PASTE3(a,b,c) a##b##c
-#define SIMPLE_MODEL(a,b) PASTE3(SIMPLE_MODEL,a,b)
+#define SMALL_MODEL(a,b) PASTE3(SMALL,a,b)
 #ifndef STEP
-#    define STEP 16
+#    define STEP 1
 #endif
-
-typedef struct {
-    uint16_t Freq;
-    uint16_t Symbol;
-} SymFreqs;
-#endif /* C_SIMPLE_MODEL_H */
+#define MAX_FREQ (256-STEP)
+#endif /* C_SMALL_MODEL_H */
 
 
 //-----------------------------------------------------------------------------
 // Bits we regenerate for each NSYM value.
 
 typedef struct {
-    uint32_t TotFreq;  // Total frequency
-
-    // Array of Symbols approximately sorted by Freq. 
-    SymFreqs sentinel, F[NSYM+1], terminal;
-} SIMPLE_MODEL(NSYM,_);
+    uint8_t F[NSYM];
+} SMALL_MODEL(NSYM,_);
 
 
-static inline void SIMPLE_MODEL(NSYM,_init)(SIMPLE_MODEL(NSYM,_) *m, int max_sym) {
+static inline void SMALL_MODEL(NSYM,_init)(SMALL_MODEL(NSYM,_) *m) {
     int i;
     
-    for (i=0; i<max_sym; i++) {
-        m->F[i].Symbol = i;
-        m->F[i].Freq   = 1;
-    }
-    for (; i<NSYM; i++) {
-        m->F[i].Symbol = i;
-        m->F[i].Freq   = 0;
-    }
-
-    m->TotFreq         = max_sym;
-    m->sentinel.Symbol = 0;
-    m->sentinel.Freq   = MAX_FREQ; // Always first; simplifies sorting.
-    m->terminal.Symbol = 0;
-    m->terminal.Freq   = MAX_FREQ;
-    m->F[NSYM].Freq    = 0; // terminates normalize() loop. See below.
+    for (i=0; i<NSYM; i++)
+        m->F[i] = 1;
 }
 
 
-static inline void SIMPLE_MODEL(NSYM,_normalize)(SIMPLE_MODEL(NSYM,_) *m) {
-    SymFreqs *s;
-
-    /* Faster than F[i].Freq for 0 <= i < NSYM */
-    m->TotFreq=0;
-    for (s = m->F; s->Freq; s++) {
-        s->Freq -= s->Freq>>1;
-        m->TotFreq += s->Freq;
-    }
+static inline void SMALL_MODEL(NSYM,_normalize)(SMALL_MODEL(NSYM,_) *m) {
+    for (int i = 0; i < NSYM; i++)
+        m->F[i] -= m->F[i]>>1;
 }
 
-#ifdef __SSE__
-#   include <xmmintrin.h>
-#else
-#   define _mm_prefetch(a,b)
-#endif
-
-static inline void SIMPLE_MODEL(NSYM,_encodeSymbol)(SIMPLE_MODEL(NSYM,_) *m,
-                                                    RangeCoder *rc, uint16_t sym) {
-    SymFreqs *s = m->F;
-    uint32_t AccFreq  = 0;
-
-    while (s->Symbol != sym) {
-        AccFreq += s++->Freq;
-        _mm_prefetch((const char *)(s+1), _MM_HINT_T0);
+// Encode a symbol
+static inline void SMALL_MODEL(NSYM,_encodeSymbol)
+    (SMALL_MODEL(NSYM,_) *m, RangeCoder *rc, uint16_t sym) {
+    int i, tot = 0, acc[NSYM];
+    for (i = 0; i < NSYM; i++) {
+        acc[i] = tot;
+        tot += m->F[i];
     }
 
-    RC_Encode(rc, AccFreq, s->Freq, m->TotFreq);
-    s->Freq    += STEP;
-    m->TotFreq += STEP;
+    RC_Encode(rc, acc[sym], m->F[sym], tot);
+    m->F[sym] += STEP;
 
-    if (m->TotFreq > MAX_FREQ)
-        SIMPLE_MODEL(NSYM,_normalize)(m);
-
-    /* Keep approx sorted */
-    if (s[0].Freq > s[-1].Freq) {
-        SymFreqs t = s[0];
-        s[0] = s[-1];
-        s[-1] = t;
-    }
+    if (tot >= MAX_FREQ)
+        SMALL_MODEL(NSYM,_normalize)(m);
 }
 
-static inline uint16_t SIMPLE_MODEL(NSYM,_decodeSymbol)(SIMPLE_MODEL(NSYM,_) *m, RangeCoder *rc) {
-    SymFreqs* s = m->F;
-    uint32_t freq = RC_GetFreq(rc, m->TotFreq);
-    uint32_t AccFreq;
+// Update model frequencies without encoding anything.
+static inline void SMALL_MODEL(NSYM,_updateSymbol)
+    (SMALL_MODEL(NSYM,_) *m, uint16_t sym) {
+    int i, tot = 0;
+    for (i = 0; i < NSYM; i++)
+        tot += m->F[i];
 
-    if (freq > MAX_FREQ)
-        return 0; // error
+    m->F[sym] += STEP;
 
-    for (AccFreq = 0; (AccFreq += s->Freq) <= freq; s++)
-        _mm_prefetch((const char *)s, _MM_HINT_T0);
-    if (s - m->F > NSYM)
-        return 0; // error
+    if (tot >= MAX_FREQ)
+        SMALL_MODEL(NSYM,_normalize)(m);
+}
 
-    AccFreq -= s->Freq;
+// Decode a symbol
+static inline uint16_t SMALL_MODEL(NSYM,_decodeSymbol)
+    (SMALL_MODEL(NSYM,_) *m, RangeCoder *rc) {
+    int sym, tot = 0;
+    for (sym = 0; sym < NSYM; sym++)
+        tot += m->F[sym];
 
-    RC_Decode(rc, AccFreq, s->Freq, m->TotFreq);
-    s->Freq    += STEP;
-    m->TotFreq += STEP;
+    uint32_t freq = RC_GetFreq(rc, tot);
+    uint32_t acc;
+    for (sym = acc = 0; (acc += m->F[sym]) <= freq; sym++)
+        ;
+    acc -= m->F[sym];
 
-    if (m->TotFreq > MAX_FREQ)
-        SIMPLE_MODEL(NSYM,_normalize)(m);
+    RC_Decode(rc, acc, m->F[sym], tot);
+    m->F[sym] += STEP;
 
-    /* Keep approx sorted */
-    if (s[0].Freq > s[-1].Freq) {
-        SymFreqs t = s[0];
-        s[0] = s[-1];
-        s[-1] = t;
-        return t.Symbol;
-    }
+    if (tot >= MAX_FREQ)
+        SMALL_MODEL(NSYM,_normalize)(m);
 
-    return s->Symbol;
+    return sym;
 }
