@@ -61,9 +61,9 @@
 static fqz_slice fixed_slice = {0};
 
 fqz_slice *fake_slice(size_t buf_len, int *len, int *r2, int *sel, int nlen,
-		      unsigned char *seq, int *seq_idx) {
+                      unsigned char *seq, int *seq_idx) {
     fixed_slice.num_records = (nlen == 1 && len)
-	? (buf_len+len[0]-1) / len[0] : nlen;
+        ? (buf_len+len[0]-1) / len[0] : nlen;
     assert(fixed_slice.num_records <= MAX_REC);
     int i;
     if (!fixed_slice.len)
@@ -551,6 +551,7 @@ int main(int argc, char **argv) {
         free(rec_len);
         free(rec_r2);
         free(rec_sel);
+        free(seq_idx);
         fprintf(stderr, "Total output = %ld\n", t_out);
     }
 
