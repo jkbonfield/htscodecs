@@ -348,6 +348,7 @@ unsigned char *rans_uncompress_O0_32x16_avx512(unsigned char *in,
     const uint32_t mask = (1u << TF_SHIFT)-1;
 
     __m512i maskv = _mm512_set1_epi32(mask); // set mask in all lanes
+    __m512i Lv = _mm512_set1_epi32(RANS_BYTE_L);
     __m512i R1 = _mm512_load_epi32(&Rv[0]);
     __m512i R2 = _mm512_load_epi32(&Rv[16]);
     __m512i R3 = _mm512_load_epi32(&Rv[32]);
@@ -366,8 +367,6 @@ unsigned char *rans_uncompress_O0_32x16_avx512(unsigned char *in,
 
     uint8_t overflow[64*4] = {0};
     for (i=0; i < out_end; i+=64) {
-      //for (z = 0; z < 16; z++) {
-
       // Protect against running off the end of in buffer.
       // We copy it to a worst-case local buffer when near the end.
       if ((uint8_t *)sp+128 > cp_end) {
@@ -380,22 +379,70 @@ unsigned char *rans_uncompress_O0_32x16_avx512(unsigned char *in,
       //uint16_t f = S>>(TF_SHIFT+8), b = (S>>8) & mask;
       __m512i f1 = _mm512_srli_epi32(S1, TF_SHIFT+8);
       __m512i f2 = _mm512_srli_epi32(S2, TF_SHIFT+8);
-      __m512i f3 = _mm512_srli_epi32(S3, TF_SHIFT+8);
-      __m512i f4 = _mm512_srli_epi32(S4, TF_SHIFT+8);
-
-      __m512i b1 = _mm512_and_epi32(_mm512_srli_epi32(S1, 8), maskv);
-      __m512i b2 = _mm512_and_epi32(_mm512_srli_epi32(S2, 8), maskv);
-      __m512i b3 = _mm512_and_epi32(_mm512_srli_epi32(S3, 8), maskv);
-      __m512i b4 = _mm512_and_epi32(_mm512_srli_epi32(S4, 8), maskv);
 
       //R[z] = f * (R[z] >> TF_SHIFT) + b;
-      // approx 10 cycle latency on mullo.
+      __m512i b1 = _mm512_and_epi32(_mm512_srli_epi32(S1, 8), maskv);
+      __m512i b2 = _mm512_and_epi32(_mm512_srli_epi32(S2, 8), maskv);
+
       R1 = _mm512_add_epi32(
                _mm512_mullo_epi32(
                    _mm512_srli_epi32(R1, TF_SHIFT), f1), b1);
       R2 = _mm512_add_epi32(
                _mm512_mullo_epi32(
                    _mm512_srli_epi32(R2, TF_SHIFT), f2), b2);
+
+      __mmask16 renorm_mask1 = _mm512_cmplt_epu32_mask(R1, Lv);
+      __mmask16 renorm_mask2 = _mm512_cmplt_epu32_mask(R2, Lv);
+
+      // next 16 words, advance by however many we used
+      __m512i renorm_words1 = _mm512_cvtepu16_epi32(_mm256_loadu_si256(
+                                      (const __m256i *)sp));
+      sp += _mm_popcnt_u32(renorm_mask1);
+      __m512i renorm_words2 = _mm512_cvtepu16_epi32(_mm256_loadu_si256(
+                                      (const __m256i *)sp));
+
+      sp += _mm_popcnt_u32(renorm_mask2);
+      __m512i renorm_words3 = _mm512_cvtepu16_epi32(_mm256_loadu_si256(
+                                      (const __m256i *)sp));
+
+       // select masked only
+      __m512i renorm_vals1, renorm_vals2, renorm_vals3, renorm_vals4;
+      renorm_vals1 = _mm512_maskz_expand_epi32(renorm_mask1, renorm_words1);
+      renorm_vals2 = _mm512_maskz_expand_epi32(renorm_mask2, renorm_words2);
+
+      R1 = _mm512_mask_slli_epi32(R1, renorm_mask1, R1, 16);
+      R2 = _mm512_mask_slli_epi32(R2, renorm_mask2, R2, 16);
+
+      R1 = _mm512_add_epi32(R1, renorm_vals1);
+      R2 = _mm512_add_epi32(R2, renorm_vals2);
+
+      // For start of next loop iteration.  This has been moved here
+      // (and duplicated to before the loop starts) so we can do something
+      // with the latency period of gather, such as finishing up the
+      // renorm offset and writing the results. 
+
+      masked1 = _mm512_and_epi32(R1, maskv);
+      masked2 = _mm512_and_epi32(R2, maskv);
+
+      //out[i+z] = S;
+      _mm_storeu_si128((__m128i *)(out+i),    _mm512_cvtepi32_epi8(S1));
+      _mm_storeu_si128((__m128i *)(out+i+16), _mm512_cvtepi32_epi8(S2));
+      _mm_storeu_si128((__m128i *)(out+i+32), _mm512_cvtepi32_epi8(S3));
+      _mm_storeu_si128((__m128i *)(out+i+48), _mm512_cvtepi32_epi8(S4));
+
+      // Gather is slow bit (half total time) - 30 cycle latency.
+      S1 = _mm512_i32gather_epi32(masked1, (int *)s3, sizeof(*s3));
+      S2 = _mm512_i32gather_epi32(masked2, (int *)s3, sizeof(*s3));
+
+      // --------------------------------------------------
+      // R3 R4
+      __m512i f3 = _mm512_srli_epi32(S3, TF_SHIFT+8);
+      __m512i f4 = _mm512_srli_epi32(S4, TF_SHIFT+8);
+
+      __m512i b3 = _mm512_and_epi32(_mm512_srli_epi32(S3, 8), maskv);
+      __m512i b4 = _mm512_and_epi32(_mm512_srli_epi32(S4, 8), maskv);
+
+      // approx 10 cycle latency on mullo.
       R3 = _mm512_add_epi32(
                _mm512_mullo_epi32(
                    _mm512_srli_epi32(R3, TF_SHIFT), f3), b3);
@@ -404,71 +451,31 @@ unsigned char *rans_uncompress_O0_32x16_avx512(unsigned char *in,
                    _mm512_srli_epi32(R4, TF_SHIFT), f4), b4);
 
       // renorm. this is the interesting part:
-      __mmask16 renorm_mask1, renorm_mask2, renorm_mask3, renorm_mask4;
-      renorm_mask1=_mm512_cmplt_epu32_mask(R1, _mm512_set1_epi32(RANS_BYTE_L));
-      renorm_mask2=_mm512_cmplt_epu32_mask(R2, _mm512_set1_epi32(RANS_BYTE_L));
-      renorm_mask3=_mm512_cmplt_epu32_mask(R3, _mm512_set1_epi32(RANS_BYTE_L));
-      renorm_mask4=_mm512_cmplt_epu32_mask(R4, _mm512_set1_epi32(RANS_BYTE_L));
+      __mmask16 renorm_mask3 = _mm512_cmplt_epu32_mask(R3, Lv);
+      __mmask16 renorm_mask4 = _mm512_cmplt_epu32_mask(R4, Lv);
       // advance by however many words we actually read
 
-      // next 16 words, advance by however many we used
-      __m512i renorm_words1 = _mm512_cvtepu16_epi32(_mm256_loadu_si256((const __m256i *)sp)); 
-      int offset;
-      offset = _mm_popcnt_u32(renorm_mask1);
-      __m512i renorm_words2 = _mm512_cvtepu16_epi32(_mm256_loadu_si256(
-                                      (const __m256i *)(sp+offset)));
-      offset += _mm_popcnt_u32(renorm_mask2);
-      __m512i renorm_words3 = _mm512_cvtepu16_epi32(_mm256_loadu_si256(
-                                      (const __m256i *)(sp+offset)));
-      offset += _mm_popcnt_u32(renorm_mask3);
+      sp += _mm_popcnt_u32(renorm_mask3);
       __m512i renorm_words4 = _mm512_cvtepu16_epi32(_mm256_loadu_si256(
-                                      (const __m256i *)(sp+offset)));
-      offset += _mm_popcnt_u32(renorm_mask4);
-      sp += offset;
+                                      (const __m256i *)sp));
+      sp += _mm_popcnt_u32(renorm_mask4);
 
-      // select masked only
-      __m512i renorm_vals1, renorm_vals2, renorm_vals3, renorm_vals4;
-      renorm_vals1 = _mm512_maskz_expand_epi32(renorm_mask1, renorm_words1);
-      renorm_vals2 = _mm512_maskz_expand_epi32(renorm_mask2, renorm_words2);
+
       renorm_vals3 = _mm512_maskz_expand_epi32(renorm_mask3, renorm_words3);
       renorm_vals4 = _mm512_maskz_expand_epi32(renorm_mask4, renorm_words4);
 
       // shift & add selected words
-      R1 = _mm512_mask_slli_epi32(R1, renorm_mask1, R1, 16);
-      R2 = _mm512_mask_slli_epi32(R2, renorm_mask2, R2, 16);
       R3 = _mm512_mask_slli_epi32(R3, renorm_mask3, R3, 16);
       R4 = _mm512_mask_slli_epi32(R4, renorm_mask4, R4, 16);
 
-      R1 = _mm512_add_epi32(R1, renorm_vals1);
-      R2 = _mm512_add_epi32(R2, renorm_vals2);
       R3 = _mm512_add_epi32(R3, renorm_vals3);
       R4 = _mm512_add_epi32(R4, renorm_vals4);
 
-      // For start of next loop iteration.  This has been moved here
-      // (and duplicated to before the loop starts) so we can do something
-      // with the latency period of gather, such as finishing up the
-      // renorm offset and writing the results. 
-      __m512i S1_ = S1; // temporary copy for use in out[]=S later
-      __m512i S2_ = S2;
-      __m512i S3_ = S3;
-      __m512i S4_ = S4;
-
-      masked1 = _mm512_and_epi32(R1, maskv);
-      masked2 = _mm512_and_epi32(R2, maskv);
       masked3 = _mm512_and_epi32(R3, maskv);
       masked4 = _mm512_and_epi32(R4, maskv);
 
-      // Gather is slow bit (half total time) - 30 cycle latency.
-      S1 = _mm512_i32gather_epi32(masked1, (int *)s3, sizeof(*s3));
-      S2 = _mm512_i32gather_epi32(masked2, (int *)s3, sizeof(*s3));
       S3 = _mm512_i32gather_epi32(masked3, (int *)s3, sizeof(*s3));
       S4 = _mm512_i32gather_epi32(masked4, (int *)s3, sizeof(*s3));
-
-      //out[i+z] = S;
-      _mm_storeu_si128((__m128i *)(out+i),    _mm512_cvtepi32_epi8(S1_));
-      _mm_storeu_si128((__m128i *)(out+i+16), _mm512_cvtepi32_epi8(S2_));
-      _mm_storeu_si128((__m128i *)(out+i+32), _mm512_cvtepi32_epi8(S3_));
-      _mm_storeu_si128((__m128i *)(out+i+48), _mm512_cvtepi32_epi8(S4_));
     }      
 
     _mm512_store_epi32(&Rv[ 0], R1);
