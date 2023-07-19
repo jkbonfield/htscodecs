@@ -628,13 +628,9 @@ unsigned char *rans_uncompress_O0_32x16_avx512(unsigned char *in,
 
       // select masked only
       __m512i renorm_vals1, renorm_vals2;
-      renorm_vals1 = _mm512_maskz_expand_epi32(renorm_mask1, renorm_words1);
-      renorm_vals2 = _mm512_maskz_expand_epi32(renorm_mask2, renorm_words2);
-      // shift & add selected words
-      R1 = _mm512_mask_slli_epi32(R1, renorm_mask1, R1, 16);
-      R2 = _mm512_mask_slli_epi32(R2, renorm_mask2, R2, 16);
-      R1 = _mm512_add_epi32(R1, renorm_vals1);
-      R2 = _mm512_add_epi32(R2, renorm_vals2);
+
+      renorm_vals1 = _mm512_mask_expand_epi32(R1, renorm_mask1, renorm_words1);
+      renorm_vals2 = _mm512_mask_expand_epi32(R2, renorm_mask2, renorm_words2);
 
       // For start of next loop iteration.  This has been moved here
       // (and duplicated to before the loop starts) so we can do something
@@ -643,14 +639,23 @@ unsigned char *rans_uncompress_O0_32x16_avx512(unsigned char *in,
       __m512i S1_ = S1; // temporary copy for use in out[]=S later
       __m512i S2_ = S2;
 
-      masked1 = _mm512_and_epi32(R1, maskv);
-      masked2 = _mm512_and_epi32(R2, maskv);
-      // Gather is slow bit (half total time) - 30 cycle latency.
+      masked1 = _mm512_and_epi32(renorm_vals1, maskv);
       S1 = _mm512_i32gather_epi32x(masked1, (int *)s3, sizeof(*s3));
+      masked2 = _mm512_and_epi32(renorm_vals2, maskv);
       S2 = _mm512_i32gather_epi32x(masked2, (int *)s3, sizeof(*s3));
+
+      R1 = _mm512_mask_slli_epi32(R1, renorm_mask1, R1, 16);
+      R2 = _mm512_mask_slli_epi32(R2, renorm_mask2, R2, 16);
+
+      __m512i m16 = _mm512_set1_epi32(0xffff);
+      renorm_vals1 = _mm512_maskz_and_epi32(renorm_mask1, renorm_vals1, m16);
+      renorm_vals2 = _mm512_maskz_and_epi32(renorm_mask2, renorm_vals2, m16);
 
       // advance by however many words we actually read
       sp += _mm_popcnt_u32(renorm_mask2);
+
+      R1 = _mm512_add_epi32(R1, renorm_vals1);
+      R2 = _mm512_add_epi32(R2, renorm_vals2);
 
       //out[i+z] = S;
       _mm_storeu_si128((__m128i *)(out+i),    _mm512_cvtepi32_epi8(S1_));
