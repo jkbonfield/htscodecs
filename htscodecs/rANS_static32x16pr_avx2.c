@@ -115,13 +115,27 @@ static inline __m256i _mm256_mulhi_epu32(__m256i a, __m256i b) {
 }
 #endif
 
-#if 0
+#if 1
 // Simulated gather.  This is sometimes faster as it can run on other ports.
 static inline __m256i _mm256_i32gather_epi32x(int *b, __m256i idx, int size) {
     int c[8] __attribute__((aligned(32)));
     _mm256_store_si256((__m256i *)c, idx);
     return _mm256_set_epi32(b[c[7]], b[c[6]], b[c[5]], b[c[4]],
                             b[c[3]], b[c[2]], b[c[1]], b[c[0]]);
+}
+#elif 1
+static inline __m256i _mm256_i32gather_epi32x(int *b, __m256i idx, int size) {
+    int c[8] __attribute__((aligned(32)));
+    _mm256_store_si256((__m256i *)c, idx);
+//    int d[8] __attribute__((aligned(32)));
+//    for (int i = 0; i < 8; i++)
+//        d[i] = b[c[i]];
+
+    int d[8] __attribute__((aligned(32))) = {
+        b[c[0]], b[c[1]], b[c[2]], b[c[3]],
+        b[c[4]], b[c[5]], b[c[6]], b[c[7]]
+    };
+    return _mm256_load_si256((const __m256i *)d);
 }
 #else
 #define _mm256_i32gather_epi32x _mm256_i32gather_epi32

@@ -55,6 +55,31 @@
 #include "varint.h"
 #include "utils.h"
 
+#if 1
+static inline __m512i _mm512_i32gather_epi32x(__m512i idx, void *v, int size) {
+    int c[16] __attribute__((aligned(32)));
+    uint32_t *b = (uint32_t *)v;
+    _mm512_store_si512((__m512i *)c, idx);
+    return _mm512_set_epi32(b[c[15]], b[c[14]], b[c[13]], b[c[12]],
+                            b[c[11]], b[c[10]], b[c[ 9]], b[c[ 8]],
+                            b[c[ 7]], b[c[ 6]], b[c[ 5]], b[c[ 4]],
+                            b[c[ 3]], b[c[ 2]], b[c[ 1]], b[c[ 0]]);
+}
+
+static inline __m512i _mm512_i32gather_epi32x1(__m512i idx, void *v, int size) {
+    int c[16] __attribute__((aligned(32)));
+    uint8_t *b = (uint8_t *)v;
+    _mm512_store_si512((__m512i *)c, idx);
+    return _mm512_set_epi32(b[c[15]], b[c[14]], b[c[13]], b[c[12]],
+                            b[c[11]], b[c[10]], b[c[ 9]], b[c[ 8]],
+                            b[c[ 7]], b[c[ 6]], b[c[ 5]], b[c[ 4]],
+                            b[c[ 3]], b[c[ 2]], b[c[ 1]], b[c[ 0]]);
+}
+#else
+#define _mm512_i32gather_epi32x _mm512_i32gather_epi32
+#define _mm512_i32gather_epi32x1 _mm512_i32gather_epi32
+#endif
+
 unsigned char *rans_compress_O0_32x16_avx512(unsigned char *in,
                                              unsigned int in_size,
                                              unsigned char *out,
@@ -149,8 +174,8 @@ unsigned char *rans_compress_O0_32x16_avx512(unsigned char *in,
         __m512i c1 = _mm512_cvtepu8_epi32(_mm256_extracti128_si256(c12,0));
         __m512i c2 = _mm512_cvtepu8_epi32(_mm256_extracti128_si256(c12,1));
 #define SET512(a,b) \
-        __m512i a##1 = _mm512_i32gather_epi32(c1, b, 4); \
-        __m512i a##2 = _mm512_i32gather_epi32(c2, b, 4)
+        __m512i a##1 = _mm512_i32gather_epi32x(c1, b, 4); \
+        __m512i a##2 = _mm512_i32gather_epi32x(c2, b, 4)
 
         SET512(xmax, SB);
 
@@ -304,8 +329,8 @@ unsigned char *rans_uncompress_O0_32x16_avx512(unsigned char *in,
     // loop for the next cycle so we can remove some of the instr. latency.
     __m512i masked1 = _mm512_and_epi32(R1, maskv);
     __m512i masked2 = _mm512_and_epi32(R2, maskv);
-    __m512i S1 = _mm512_i32gather_epi32(masked1, (int *)s3, sizeof(*s3));
-    __m512i S2 = _mm512_i32gather_epi32(masked2, (int *)s3, sizeof(*s3));
+    __m512i S1 = _mm512_i32gather_epi32x(masked1, (int *)s3, sizeof(*s3));
+    __m512i S2 = _mm512_i32gather_epi32x(masked2, (int *)s3, sizeof(*s3));
 
     uint8_t overflow[64+64] = {0};
     for (i=0; i < out_end; i+=32) {
@@ -365,9 +390,9 @@ unsigned char *rans_uncompress_O0_32x16_avx512(unsigned char *in,
 //      _mm_storeu_si128((__m128i *)(out+i+16), _mm512_cvtepi32_epi8(S2));
 
       masked1 = _mm512_and_epi32(renorm_vals1, maskv);
-      S1 = _mm512_i32gather_epi32(masked1, (int *)s3, sizeof(*s3));
+      S1 = _mm512_i32gather_epi32x(masked1, (int *)s3, sizeof(*s3));
       masked2 = _mm512_and_epi32(renorm_vals2, maskv);
-      S2 = _mm512_i32gather_epi32(masked2, (int *)s3, sizeof(*s3));
+      S2 = _mm512_i32gather_epi32x(masked2, (int *)s3, sizeof(*s3));
 
       R1 = _mm512_mask_slli_epi32(R1, renorm_mask1, R1, 16);
       R2 = _mm512_mask_slli_epi32(R2, renorm_mask2, R2, 16);
@@ -439,8 +464,8 @@ static inline void transpose_and_copy_avx512(uint8_t *out, int iN[32],
     v1 = _mm512_slli_epi32(v1, 5);
     
     for (z = 0; z < 32; z++) {
-        __m512i t1 = _mm512_i32gather_epi32(v1, &t32[ 0][z], 4);
-        __m512i t2 = _mm512_i32gather_epi32(v1, &t32[16][z], 4);
+        __m512i t1 = _mm512_i32gather_epi32x(v1, &t32[ 0][z], 4);
+        __m512i t2 = _mm512_i32gather_epi32x(v1, &t32[16][z], 4);
         _mm_storeu_si128((__m128i*)(&out[iN[z]   ]), _mm512_cvtepi32_epi8(t1));
         _mm_storeu_si128((__m128i*)(&out[iN[z]+16]), _mm512_cvtepi32_epi8(t2));
         iN[z] += 32;
@@ -530,8 +555,8 @@ unsigned char *rans_compress_O1_32x16_avx512(unsigned char *in,
                                    iN[ 7], iN[ 6], iN[ 5], iN[ 4],
                                    iN[ 3], iN[ 2], iN[ 1], iN[ 0]);
 
-    __m512i c1 = _mm512_i32gather_epi32(iN1, in, 1);
-    __m512i c2 = _mm512_i32gather_epi32(iN2, in, 1);
+    __m512i c1 = _mm512_i32gather_epi32x1(iN1, in, 1);
+    __m512i c2 = _mm512_i32gather_epi32x1(iN2, in, 1);
 
     // We cache the next 64-bytes locally and transpose.
     // This means we can load 32 ints from t32[x] with load instructions
@@ -581,8 +606,8 @@ unsigned char *rans_compress_O1_32x16_avx512(unsigned char *in,
         //      }
 
 #define SET512x(a,x) \
-        __m512i a##1 = _mm512_i32gather_epi32(vidx1, &syms[0][0].x, 4); \
-        __m512i a##2 = _mm512_i32gather_epi32(vidx2, &syms[0][0].x, 4)
+        __m512i a##1 = _mm512_i32gather_epi32x(vidx1, &syms[0][0].x, 4); \
+        __m512i a##2 = _mm512_i32gather_epi32x(vidx2, &syms[0][0].x, 4)
 
         // Start of next loop, moved here to remove latency.
         // last[z] = c[z]
@@ -624,8 +649,8 @@ unsigned char *rans_compress_O1_32x16_avx512(unsigned char *in,
             }
         }
         if (next_batch < 0) {
-            c1 = _mm512_i32gather_epi32(iN1, in, 1);
-            c2 = _mm512_i32gather_epi32(iN2, in, 1);
+            c1 = _mm512_i32gather_epi32x1(iN1, in, 1);
+            c2 = _mm512_i32gather_epi32x1(iN2, in, 1);
 
             c1 = _mm512_and_si512(c1, _mm512_set1_epi32(0xff));
             c2 = _mm512_and_si512(c2, _mm512_set1_epi32(0xff));
@@ -823,9 +848,9 @@ unsigned char *rans_uncompress_O1_32x16_avx512(unsigned char *in,
             _masked2 = _mm512_add_epi32(_masked2, _Lv2);
 
             // This is the biggest bottleneck
-            __m512i _Sv1 = _mm512_i32gather_epi32(_masked1, (int *)&s3F[0][0],
+            __m512i _Sv1 = _mm512_i32gather_epi32x(_masked1, (int *)&s3F[0][0],
                                                   sizeof(s3F[0][0]));
-            __m512i _Sv2 = _mm512_i32gather_epi32(_masked2, (int *)&s3F[0][0],
+            __m512i _Sv2 = _mm512_i32gather_epi32x(_masked2, (int *)&s3F[0][0],
                                                   sizeof(s3F[0][0]));
 
             //  f[z] = S[z]>>(TF_SHIFT_O1+8);
@@ -987,9 +1012,9 @@ unsigned char *rans_uncompress_O1_32x16_avx512(unsigned char *in,
         _masked2 = _mm512_add_epi32(_masked2, _Lv2);
 
         // This is the biggest bottleneck
-        __m512i _Sv1 = _mm512_i32gather_epi32(_masked1, (int *)&s3F[0][0],
+        __m512i _Sv1 = _mm512_i32gather_epi32x(_masked1, (int *)&s3F[0][0],
                                               sizeof(s3F[0][0]));
-        __m512i _Sv2 = _mm512_i32gather_epi32(_masked2, (int *)&s3F[0][0],
+        __m512i _Sv2 = _mm512_i32gather_epi32x(_masked2, (int *)&s3F[0][0],
                                               sizeof(s3F[0][0]));
         // SIMD version ends decoding early as it reads at most 64 bytes
         // from input via 4 vectorised loads.
@@ -1065,9 +1090,9 @@ unsigned char *rans_uncompress_O1_32x16_avx512(unsigned char *in,
               _masked1 = _mm512_add_epi32(_masked1, _Lv1);
               _masked2 = _mm512_add_epi32(_masked2, _Lv2);
 
-              _Sv1 = _mm512_i32gather_epi32(_masked1, (int *)&s3F[0][0],
+              _Sv1 = _mm512_i32gather_epi32x(_masked1, (int *)&s3F[0][0],
                                             sizeof(s3F[0][0]));
-              _Sv2 = _mm512_i32gather_epi32(_masked2, (int *)&s3F[0][0],
+              _Sv2 = _mm512_i32gather_epi32x(_masked2, (int *)&s3F[0][0],
                                             sizeof(s3F[0][0]));
             }
 
