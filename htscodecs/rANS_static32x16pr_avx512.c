@@ -55,7 +55,10 @@
 #include "varint.h"
 #include "utils.h"
 
-#if 1
+#if 0
+// NB: doesn't help with AVX512, unlike AVX2, for order-0/1 alike
+// -o4 1305MB/s dec downfall patch
+// -o5  922MB/s dec downfall patch
 static inline __m512i _mm512_i32gather_epi32x(__m512i idx, void *v, int size) {
     int c[16] __attribute__((aligned(32)));
     uint32_t *b = (uint32_t *)v;
@@ -66,6 +69,39 @@ static inline __m512i _mm512_i32gather_epi32x(__m512i idx, void *v, int size) {
                             b[c[ 3]], b[c[ 2]], b[c[ 1]], b[c[ 0]]);
 }
 
+#elif 0
+static inline __m256i _mm256_i32gather_epi32x(int *b, __m256i idx, int size) {
+    int c[8] __attribute__((aligned(32)));
+    _mm256_store_si256((__m256i *)c, idx);
+    int d[8] __attribute__((aligned(32))) = {
+        b[c[0]], b[c[1]], b[c[2]], b[c[3]],
+        b[c[4]], b[c[5]], b[c[6]], b[c[7]]
+    };
+    return _mm256_load_si256((const __m256i *)d);
+}
+
+// -o4  805 MB/s dec downfall patch and _mm256_i32gather_epi32
+// -o4 1325 MB/s dec downfall patch and _mm256_i32gather_epi32x
+// -o5  982 MB/s dec downfall patch and _mm256_i32gather_epi32x
+static inline __m512i _mm512_i32gather_epi32x(__m512i idx, void *v, int size) {
+    __m256i A = _mm512_castsi512_si256(idx);
+    __m256i B = _mm512_extracti64x4_epi64(idx, 1);
+    A = _mm256_i32gather_epi32x(v, A, size);
+    B = _mm256_i32gather_epi32x(v, B, size);
+    __m512i C = _mm512_castsi256_si512(A);
+    C = _mm512_inserti64x4(C, B, 1);
+    return C;
+}
+
+#else
+// -o4 1378 MB/s dec downfall patch
+// -o4 2097 MB/s dec no-downfall patch
+// -o5  978 MB/s dec downfall patch
+// -o5 1242 MB/s dec no-downfall patch
+#define _mm512_i32gather_epi32x _mm512_i32gather_epi32
+#endif
+
+#if 1
 static inline __m512i _mm512_i32gather_epi32x1(__m512i idx, void *v, int size) {
     int c[16] __attribute__((aligned(32)));
     uint8_t *b = (uint8_t *)v;
@@ -76,7 +112,6 @@ static inline __m512i _mm512_i32gather_epi32x1(__m512i idx, void *v, int size) {
                             b[c[ 3]], b[c[ 2]], b[c[ 1]], b[c[ 0]]);
 }
 #else
-#define _mm512_i32gather_epi32x _mm512_i32gather_epi32
 #define _mm512_i32gather_epi32x1 _mm512_i32gather_epi32
 #endif
 
@@ -849,9 +884,9 @@ unsigned char *rans_uncompress_O1_32x16_avx512(unsigned char *in,
 
             // This is the biggest bottleneck
             __m512i _Sv1 = _mm512_i32gather_epi32x(_masked1, (int *)&s3F[0][0],
-                                                  sizeof(s3F[0][0]));
+                                                   sizeof(s3F[0][0]));
             __m512i _Sv2 = _mm512_i32gather_epi32x(_masked2, (int *)&s3F[0][0],
-                                                  sizeof(s3F[0][0]));
+                                                   sizeof(s3F[0][0]));
 
             //  f[z] = S[z]>>(TF_SHIFT_O1+8);
             __m512i _fv1 = _mm512_srli_epi32(_Sv1, TF_SHIFT_O1+8);
@@ -1013,9 +1048,9 @@ unsigned char *rans_uncompress_O1_32x16_avx512(unsigned char *in,
 
         // This is the biggest bottleneck
         __m512i _Sv1 = _mm512_i32gather_epi32x(_masked1, (int *)&s3F[0][0],
-                                              sizeof(s3F[0][0]));
+                                               sizeof(s3F[0][0]));
         __m512i _Sv2 = _mm512_i32gather_epi32x(_masked2, (int *)&s3F[0][0],
-                                              sizeof(s3F[0][0]));
+                                               sizeof(s3F[0][0]));
         // SIMD version ends decoding early as it reads at most 64 bytes
         // from input via 4 vectorised loads.
         isz4 -= 64;
@@ -1091,9 +1126,9 @@ unsigned char *rans_uncompress_O1_32x16_avx512(unsigned char *in,
               _masked2 = _mm512_add_epi32(_masked2, _Lv2);
 
               _Sv1 = _mm512_i32gather_epi32x(_masked1, (int *)&s3F[0][0],
-                                            sizeof(s3F[0][0]));
+                                             sizeof(s3F[0][0]));
               _Sv2 = _mm512_i32gather_epi32x(_masked2, (int *)&s3F[0][0],
-                                            sizeof(s3F[0][0]));
+                                             sizeof(s3F[0][0]));
             }
 
             _Rv1 = _mm512_mask_slli_epi32(_Rv1, _imask1, _Rv1, 16);
