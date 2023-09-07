@@ -115,15 +115,145 @@ static inline __m256i _mm256_mulhi_epu32(__m256i a, __m256i b) {
 }
 #endif
 
-#if 0
-// Simulated gather.  This is sometimes faster as it can run on other ports.
-static inline __m256i _mm256_i32gather_epi32x(int *b, __m256i idx, int size) {
-    int c[8] __attribute__((aligned(32)));
-    _mm256_store_si256((__m256i *)c, idx);
+//static inline void _mm256_i32gather_epi32y(int *b, int *c, int *d) {
+//    d[0]=b[c[0]];
+//    d[1]=b[c[1]];
+//    d[2]=b[c[2]];
+//    d[3]=b[c[3]];
+//    d[4]=b[c[4]];
+//    d[5]=b[c[5]];
+//    d[6]=b[c[6]];
+//    d[7]=b[c[7]];
+//}
+
+#define GZ // 2 step gather, also enabled simulated gather
+#ifdef GZ
+static inline __m256i _mm256_i32gather_epi32z(int *b, volatile int *c) {
+#if 1
     return _mm256_set_epi32(b[c[7]], b[c[6]], b[c[5]], b[c[4]],
                             b[c[3]], b[c[2]], b[c[1]], b[c[0]]);
+#elif 0
+    return _mm256_setr_epi32(b[c[0]], b[c[1]], b[c[2]], b[c[3]],
+			     b[c[4]], b[c[5]], b[c[6]], b[c[7]]);
+#else
+    register int bc1 = b[c[1]];
+    register int bc3 = b[c[3]];
+    register int bc5 = b[c[5]];
+    register int bc7 = b[c[7]];
+
+    __m128i x0a = _mm_cvtsi32_si128(b[c[0]]);
+    __m128i x1a = _mm_cvtsi32_si128(b[c[2]]);
+    __m128i x2a = _mm_cvtsi32_si128(b[c[4]]);
+    __m128i x3a = _mm_cvtsi32_si128(b[c[6]]);
+
+    __m128i x0 = _mm_insert_epi32(x0a, bc1, 1);
+    __m128i x1 = _mm_insert_epi32(x1a, bc3, 1);
+    __m128i x2 = _mm_insert_epi32(x2a, bc5, 1);
+    __m128i x3 = _mm_insert_epi32(x3a, bc7, 1);
+
+    __m128i x01 = _mm_unpacklo_epi64(x0, x1);
+    __m128i x23 = _mm_unpacklo_epi64(x2, x3);
+
+    __m256i z =_mm256_castsi128_si256(x01);
+    return _mm256_inserti128_si256(z, x23, 1);
+#endif
+}
+#endif
+
+#ifdef GZ
+// Faster. 1340MB/s
+// Simulated gather.  This is sometimes faster as it can run on other ports.
+// Note Skylake has latency 5, but Alderlake / Sapphire Rapids is 1.
+// So this gets considerably better with newer CPUs.
+static inline __m256i _mm256_i32gather_epi32x(int *b, __m256i idx, int size) {
+    volatile // force the store to happen, hence forcing scalar loads
+    int c[8] __attribute__((aligned(32)));
+    _mm256_store_si256((__m256i *)c, idx);
+#if 1
+    return _mm256_set_epi32(b[c[7]], b[c[6]], b[c[5]], b[c[4]],
+                            b[c[3]], b[c[2]], b[c[1]], b[c[0]]);
+#elif 1
+    register int bc1 = b[c[1]];
+    register int bc3 = b[c[3]];
+    register int bc5 = b[c[5]];
+    register int bc7 = b[c[7]];
+
+    __m128i x0a = _mm_cvtsi32_si128(b[c[0]]);
+    __m128i x1a = _mm_cvtsi32_si128(b[c[2]]);
+    __m128i x2a = _mm_cvtsi32_si128(b[c[4]]);
+    __m128i x3a = _mm_cvtsi32_si128(b[c[6]]);
+
+    __m128i x0 = _mm_insert_epi32(x0a, bc1, 1);
+    __m128i x1 = _mm_insert_epi32(x1a, bc3, 1);
+    __m128i x2 = _mm_insert_epi32(x2a, bc5, 1);
+    __m128i x3 = _mm_insert_epi32(x3a, bc7, 1);
+
+    __m128i x01 = _mm_unpacklo_epi64(x0, x1);
+    __m128i x23 = _mm_unpacklo_epi64(x2, x3);
+
+    __m256i z =_mm256_castsi128_si256(x01);
+    return _mm256_inserti128_si256(z, x23, 1);
+
+//    __m128i x0 = _mm_set_epi32(d3, d2, d1, d0);
+//    __m128i x1 = _mm_set_epi32(d7, d6, d5, d4);
+//    __m256i z =_mm256_castsi128_si256(x0);
+//    return _mm256_inserti128_si256(z, x1, 1);
+#elif 1
+    return _mm256_setr_epi32(b[c[0]], b[c[1]], b[c[2]], b[c[3]],
+			     b[c[4]], b[c[5]], b[c[6]], b[c[7]]);
+#else
+    int d[8] __attribute__((aligned(32)));
+    for (int i = 0; i < 8; i++)
+      d[i] = b[c[i]];
+    return _mm256_setr_epi32(d[0], d[1], d[2], d[3],
+			     d[4], d[5], d[6], d[7]);
+#endif
+}
+#elif 0
+// Faster. 1388MB/s, but gcc only
+static inline __m256i _mm256_i32gather_epi32x(int *b, __m256i idx, int size) {
+    int c[8] __attribute__((aligned(32))), d[8];
+    _mm256_store_si256((__m256i *)c, idx);
+
+    d[0] = b[c[0]];
+    d[1] = b[c[1]];
+    d[2] = b[c[2]];
+    d[3] = b[c[3]];
+    d[4] = b[c[4]];
+    d[5] = b[c[5]];
+    d[6] = b[c[6]];
+    d[7] = b[c[7]];
+    //    return _mm256_set_epi32(d[7],d[6],d[5],d[4],d[3],d[2],d[1],d[0]);
+    return _mm256_load_si256((__m256i *)d);
+}
+#elif 0
+// Better than normal gather, but slower than straight store and set
+// 770MB/s
+static inline __m256i _mm256_i32gather_epi32x(int *b, __m256i idx, int size) {
+    return _mm256_set_epi32(b[_mm256_extract_epi32(idx, 7)],
+                            b[_mm256_extract_epi32(idx, 6)],
+                            b[_mm256_extract_epi32(idx, 5)],
+                            b[_mm256_extract_epi32(idx, 4)],
+                            b[_mm256_extract_epi32(idx, 3)],
+                            b[_mm256_extract_epi32(idx, 2)],
+                            b[_mm256_extract_epi32(idx, 1)],
+                            b[_mm256_extract_epi32(idx, 0)]);
+}
+#elif 0
+// VERY slow.  399MB/s
+static inline __m256i _mm256_i32gather_epi32x(int *b, __m256i idx, int size) {
+    // 2 x 128-bit gathers
+    __m128i A = _mm256_castsi256_si128(idx);
+    __m128i B = _mm256_extracti128_si256(idx, 1);
+    A = _mm_i32gather_epi32(b, A, 4);
+    B = _mm_i32gather_epi32(b, B, 4);
+    __m256i C = _mm256_castsi128_si256(A);
+    C = _mm256_inserti128_si256(C, B, 1);
+    return C;
 }
 #else
+// Slow with Downfall patch: 650MB/s
+// ~1800MB/s without it?
 #define _mm256_i32gather_epi32x _mm256_i32gather_epi32
 #endif
 
@@ -500,12 +630,33 @@ unsigned char *rans_uncompress_O0_32x16_avx2(unsigned char *in,
     for (i=0; i < out_end; i+=NX) {
         //for (z = 0; z < NX; z++)
         //  m[z] = R[z] & mask;
+#ifndef GZ_do_this_always // simulated epi32x still wins out with "volatile"
         __m256i masked1 = _mm256_and_si256(Rv1, maskv);
-        __m256i masked2 = _mm256_and_si256(Rv2, maskv);
+	__m256i masked2 = _mm256_and_si256(Rv2, maskv);
+        __m256i masked3 = _mm256_and_si256(Rv3, maskv);
+        __m256i masked4 = _mm256_and_si256(Rv4, maskv);
 
-        //  S[z] = s3[m[z]];
-        __m256i Sv1 = _mm256_i32gather_epi32x((int *)s3, masked1, sizeof(*s3));
+	//  S[z] = s3[m[z]];
+	__m256i Sv1 = _mm256_i32gather_epi32x((int *)s3, masked1, sizeof(*s3));
         __m256i Sv2 = _mm256_i32gather_epi32x((int *)s3, masked2, sizeof(*s3));
+        __m256i Sv3 = _mm256_i32gather_epi32x((int *)s3, masked3, sizeof(*s3));
+        __m256i Sv4 = _mm256_i32gather_epi32x((int *)s3, masked4, sizeof(*s3));
+#else
+        // A bunch of masks and stores now
+        volatile int x1[8] __attribute__((aligned(32)));
+        volatile int x2[8] __attribute__((aligned(32)));
+        volatile int x3[8] __attribute__((aligned(32)));
+        volatile int x4[8] __attribute__((aligned(32)));
+	_mm256_store_si256((__m256i *)x1, _mm256_and_si256(Rv1, maskv));
+	_mm256_store_si256((__m256i *)x2, _mm256_and_si256(Rv2, maskv));
+	_mm256_store_si256((__m256i *)x3, _mm256_and_si256(Rv3, maskv));
+	_mm256_store_si256((__m256i *)x4, _mm256_and_si256(Rv4, maskv));
+
+        __m256i Sv1 = _mm256_i32gather_epi32z((int *)s3, x1);
+        __m256i Sv2 = _mm256_i32gather_epi32z((int *)s3, x2);
+        __m256i Sv3 = _mm256_i32gather_epi32z((int *)s3, x3);
+        __m256i Sv4 = _mm256_i32gather_epi32z((int *)s3, x4);
+#endif
 
         //  f[z] = S[z]>>(TF_SHIFT+8);
         __m256i fv1 = _mm256_srli_epi32(Sv1, TF_SHIFT+8);
@@ -527,7 +678,14 @@ unsigned char *rans_uncompress_O0_32x16_avx2(unsigned char *in,
                   _mm256_mullo_epi32(
                       _mm256_srli_epi32(Rv2,TF_SHIFT), fv2), bv2);
 
-#ifdef __clang__
+//#ifdef __clang__
+//#define CHECK_EARLY
+//#endif
+
+// With code layout changes, now little diff between clang and gcc?
+//#define CHECK_EARLY
+
+#ifdef CHECK_EARLY
         // Protect against running off the end of in buffer.
         // We copy it to a worst-case local buffer when near the end.
         if ((uint8_t *)sp > cp_end) {
@@ -585,16 +743,8 @@ unsigned char *rans_uncompress_O0_32x16_avx2(unsigned char *in,
 
         // ------------------------------------------------------------
 
-        //  m[z] = R[z] & mask;
-        //  S[z] = s3[m[z]];
-        __m256i masked3 = _mm256_and_si256(Rv3, maskv);
-        __m256i Sv3 = _mm256_i32gather_epi32x((int *)s3, masked3, sizeof(*s3));
-
         *(uint64_t *)&out[i+0] = _mm256_extract_epi64(sv1, 0);
         *(uint64_t *)&out[i+8] = _mm256_extract_epi64(sv1, 2);
-
-        __m256i masked4 = _mm256_and_si256(Rv4, maskv);
-        __m256i Sv4 = _mm256_i32gather_epi32x((int *)s3, masked4, sizeof(*s3));
 
         //  f[z] = S[z]>>(TF_SHIFT+8);
         __m256i fv3 = _mm256_srli_epi32(Sv3, TF_SHIFT+8);
@@ -650,7 +800,7 @@ unsigned char *rans_uncompress_O0_32x16_avx2(unsigned char *in,
         Vv4 = _mm256_permutevar8x32_epi32(Vv4, idx4);
         Yv4 = _mm256_or_si256(Yv4, Vv4);
 
-#ifndef __clang__
+#ifndef CHECK_EARLY
         // 26% faster here than above for gcc10, but former location is
         // better on clang.
 
