@@ -169,10 +169,15 @@ static inline __m256i _mm256_i32gather_epi32x(int *b, __m256i idx, int size) {
     volatile // force the store to happen, hence forcing scalar loads
     int c[8] __attribute__((aligned(32)));
     _mm256_store_si256((__m256i *)c, idx);
+
+    //__asm__ volatile ("vmovdqa %1, %0\n\t"
+    //        : "=m" (c)  // output registers
+    //        : "x" (idx) // input registers
+    //        );
 #if 1
     return _mm256_set_epi32(b[c[7]], b[c[6]], b[c[5]], b[c[4]],
                             b[c[3]], b[c[2]], b[c[1]], b[c[0]]);
-#elif 1
+#elif 0
     register int bc1 = b[c[1]];
     register int bc3 = b[c[3]];
     register int bc5 = b[c[5]];
@@ -191,13 +196,14 @@ static inline __m256i _mm256_i32gather_epi32x(int *b, __m256i idx, int size) {
     __m128i x01 = _mm_unpacklo_epi64(x0, x1);
     __m128i x23 = _mm_unpacklo_epi64(x2, x3);
 
-    __m256i z =_mm256_castsi128_si256(x01);
-    return _mm256_inserti128_si256(z, x23, 1);
+    __m256i y =_mm256_castsi128_si256(x01);
+    return _mm256_inserti128_si256(y, x23, 1);
 
-//    __m128i x0 = _mm_set_epi32(d3, d2, d1, d0);
-//    __m128i x1 = _mm_set_epi32(d7, d6, d5, d4);
-//    __m256i z =_mm256_castsi128_si256(x0);
-//    return _mm256_inserti128_si256(z, x1, 1);
+#elif 1
+    __m128i x0 = _mm_set_epi32(b[c[3]], b[c[2]], b[c[1]], b[c[0]]);
+    __m128i x1 = _mm_set_epi32(b[c[7]], b[c[6]], b[c[5]], b[c[4]]);
+    __m256i y =_mm256_castsi128_si256(x0);
+    return _mm256_inserti128_si256(y, x1, 1);
 #elif 1
     return _mm256_setr_epi32(b[c[0]], b[c[1]], b[c[2]], b[c[3]],
 			     b[c[4]], b[c[5]], b[c[6]], b[c[7]]);
