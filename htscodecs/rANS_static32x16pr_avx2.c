@@ -991,6 +991,48 @@ unsigned char *rans_compress_O1_32x16_avx2(unsigned char *in, unsigned int in_si
             int Z = z*2;
 
 #define m128_to_256 _mm256_castsi128_si256
+#ifdef __clang__
+            // Slower on gcc+AMD, but considerably faster on clang16+AMD.
+            // Comparable on intel and/or with clang10.
+            __m256i t0, t1, t2, t3;
+            __m128i *s0, *s1, *s2, *s3;
+            s0 = (__m128i *)(&syms[in[iN[Z+0]]][lN[Z+0]]);
+            s1 = (__m128i *)(&syms[in[iN[Z+4]]][lN[Z+4]]);
+            s2 = (__m128i *)(&syms[in[iN[Z+1]]][lN[Z+1]]);
+            s3 = (__m128i *)(&syms[in[iN[Z+5]]][lN[Z+5]]);
+
+            t0 = _mm256_shuffle_epi32(m128_to_256(_mm_loadu_si128(s0)), 0xE4);
+            t1 = _mm256_shuffle_epi32(m128_to_256(_mm_loadu_si128(s1)), 0xE4);
+            t2 = _mm256_shuffle_epi32(m128_to_256(_mm_loadu_si128(s2)), 0x93);
+            t3 = _mm256_shuffle_epi32(m128_to_256(_mm_loadu_si128(s3)), 0x93);
+
+            lN[Z+0] = new_symp[Z+0]; // easy silence of new_symp warning
+            lN[Z+0] = in[iN[Z+0]];
+            lN[Z+4] = in[iN[Z+4]];
+            lN[Z+1] = in[iN[Z+1]];
+            lN[Z+5] = in[iN[Z+5]];
+
+            sh[z+0] = _mm256_permute2x128_si256(t0, t1, 0x20);
+            sh[z+1] = _mm256_permute2x128_si256(t2, t3, 0x20);
+
+            s0 = (__m128i *)(&syms[in[iN[Z+2]]][lN[Z+2]]);
+            s1 = (__m128i *)(&syms[in[iN[Z+6]]][lN[Z+6]]);
+            s2 = (__m128i *)(&syms[in[iN[Z+3]]][lN[Z+3]]);
+            s3 = (__m128i *)(&syms[in[iN[Z+7]]][lN[Z+7]]);
+
+            t0 = _mm256_shuffle_epi32(m128_to_256(_mm_loadu_si128(s0)), 0x4E);
+            t1 = _mm256_shuffle_epi32(m128_to_256(_mm_loadu_si128(s1)), 0x4E);
+            t2 = _mm256_shuffle_epi32(m128_to_256(_mm_loadu_si128(s2)), 0x39);
+            t3 = _mm256_shuffle_epi32(m128_to_256(_mm_loadu_si128(s3)), 0x39);
+
+            lN[Z+2] = in[iN[Z+2]];
+            lN[Z+6] = in[iN[Z+6]];
+            lN[Z+3] = in[iN[Z+3]];
+            lN[Z+7] = in[iN[Z+7]];
+
+            sh[z+2] = _mm256_permute2x128_si256(t0, t1, 0x20);
+            sh[z+3] = _mm256_permute2x128_si256(t2, t3, 0x20);
+#else
             __m256i t0, t1, t2, t3, t4, t5, t6, t7;
             __m128i *s0, *s1, *s2, *s3, *s4, *s5, *s6, *s7;
 
@@ -1026,11 +1068,17 @@ unsigned char *rans_compress_O1_32x16_avx2(unsigned char *in, unsigned int in_si
             sh[z+2] = _mm256_permute2x128_si256(t4, t5, 0x20);
             sh[z+3] = _mm256_permute2x128_si256(t6, t7, 0x20);
 
+#define DO_MEMCPY
+#endif
+
             // potential to set xmax, rf, bias, and SD in-situ here, removing
             // the need to hold sh[] in regs.  Doing so doesn't seem to speed
             // things up though.
         }
+
+#ifdef DO_MEMCPY
         memcpy(lN, new_symp, 32);
+#endif
 
         const __m256i xA = _mm256_set_epi32(0,0,0,-1, 0,0,0,-1);
         const __m256i xB = _mm256_set_epi32(0,0,-1,0, 0,0,-1,0);
