@@ -101,7 +101,7 @@ int LLVMFuzzerTestOneInput(uint8_t *in, size_t in_size) {
                 if (comp0) {
                     if (csize != csize0 || memcmp(comp, comp0, csize) != 0) {
                         printf("\tFAIL (comp)\n");
-                        result = EXIT_FAILURE;
+                        abort();
                     }
                 } else {
                     csize0 = csize;
@@ -133,7 +133,7 @@ int LLVMFuzzerTestOneInput(uint8_t *in, size_t in_size) {
 
                 if (usize != in_size || memcmp(in, uncomp, usize) != 0) {
                     printf("\tFAIL\n");
-                    result = EXIT_FAILURE;
+                    abort();
                 }
 
                 if (comp != comp0)
