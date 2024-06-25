@@ -33,5 +33,5 @@ jobs:
       run: |
         export PATH=/mingw64/bin:$PATH
         export MSYSTEM=MINGW64
-        make check || cat tests/test-suite.log
+        make check
 

@@ -2,3 +2,5 @@
 # We pretend everything is binary so any comparisons of test files
 # work.
 tests/** -text
+tests/*.c text
+tests/*sh text
